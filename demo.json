@@ -1,0 +1,10 @@
+{
+   "Info" : {
+      "Byte order" : "大端",
+      "File Type" : "32位",
+      "The Major Version" : "1",
+      "other Byte order" : "大端",
+      "other File Type" : "64位"
+   },
+   "name" : "ELF header"
+}

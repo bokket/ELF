@@ -262,8 +262,8 @@ void ElfParse::write_json(char* tmp) {
 
 
     cout<<"StyledWriter:"<<endl;
-    Json::StyledWriter sw;
-    cout << sw.write(root) << endl << endl;
+    Json::StyledWriter bw;
+    cout << bw.write(root) << endl << endl;
 
     //输出到文件
     ofstream os;
@@ -271,10 +271,10 @@ void ElfParse::write_json(char* tmp) {
     //if (!os.is_open())
       //  cout << "error：can not find or create the file which named \" demo.json\"." << endl;
     assert(os.is_open());
-    os<<sw.write(root);
+    os<<bw.write(root);
     os.close();
-    /*cout<<sw.write(root)<<endl<<endl;
 
+    /*cout<<sw.write(root)<<endl<<endl;
     ofstream os;
     os.open("demo.json",ios::out | ios::app);
     if(!os.is_open())
