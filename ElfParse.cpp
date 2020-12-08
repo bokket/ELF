@@ -198,3 +198,87 @@ int my_strcmp (char * str1,char * str2 )
 
     return *str1-*str2;
 }
+void ElfParse::write_json(char* tmp) {
+    Json::Value root;
+    root["name"] = Json::Value("ELF header");
+    //root["Info"] = Json::Value("magic");
+    char elf_type[4] = {0x7f, 0x45, 0x4c, 0x46};
+    if ((strncmp(elf_type, tmp, 4))) {
+        for(int i=0;i<4;i++)
+        {
+            root["Magic"].append(elf_type[i]);
+        }
+    }
+
+    int len = strlen(tmp);
+    Json::Value Info;
+    for (int i = 4,j=20; i < 7, j < 23; ++i,++j)
+    {
+        switch (i)
+        {
+            case EI_CLASS:
+                if (tmp[i] == ELFCLASSNONE)
+                    Info["File Type"]=Json::Value("非法字符");
+                    //printf("%s\t", "非法字符");
+                if (tmp[i] == ELFCLASS32)
+                    Info["File Type"]=Json::Value("32位");
+                    //printf("%s\t", "32位");
+                if (tmp[i] == ELFCLASS64)
+                    Info["File Type"]=Json::Value("64位");
+                    //printf("%s\t", "64位");
+                if (tmp[j] == ELFCLASSNONE)
+                    Info["other File Type"]=Json::Value("非法字符");
+                    //printf("%s\t", "非法字符");
+                if (tmp[j] == ELFCLASS32)
+                    Info["other File Type"]=Json::Value("32位");
+                    //printf("%s\t", "32位");
+                if (tmp[j] == ELFCLASS64)
+                    Info["other File Type"]=Json::Value("64位");
+                    //printf("%s\t", "64位");
+                break;
+            case EI_DATA:
+                if (tmp[i] == ELFDATA2LSB)
+                    Info["Byte order"]=Json::Value("大端");
+                    //printf("%s\t", "大端");
+                if (tmp[i] == ELFDATA2MSB)
+                    Info["Byte order"]=Json::Value("小端");
+                    //printf("%s\t\t", "小端");
+                if (tmp[j] == ELFDATA2LSB)
+                    Info["other Byte order"]=Json::Value("大端");
+                    //printf("%s\t", "大端");
+                if (tmp[j] == ELFDATA2MSB)
+                    Info["other Byte order"]=Json::Value("小端");
+                    //printf("%s\t\t", "小端");
+                break;
+            case EI_VERSION:
+                    Info["The Major Version"]=Json::Value("1");
+                break;
+            default:
+                break;
+        }
+    }
+
+    root["Info"]=Json::Value(Info);
+
+
+    cout<<"StyledWriter:"<<endl;
+    Json::StyledWriter sw;
+    cout << sw.write(root) << endl << endl;
+
+    //输出到文件
+    ofstream os;
+    os.open("demo.json", std::ios::out | std::ios::app);
+    //if (!os.is_open())
+      //  cout << "error：can not find or create the file which named \" demo.json\"." << endl;
+    assert(os.is_open());
+    os<<sw.write(root);
+    os.close();
+    /*cout<<sw.write(root)<<endl<<endl;
+
+    ofstream os;
+    os.open("demo.json",ios::out | ios::app);
+    if(!os.is_open())
+        cout << "error：can not find or create the file which named \" demo.json\"." << endl;
+    os<<bw.write(root);
+    os.close();*/
+}

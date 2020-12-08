@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <jsoncpp/json/json.h>
+#include <fstream>
+#include <cassert>
 using namespace std;
 
 
@@ -68,7 +70,7 @@ public:
     char* fileheader(Elf64_Ehdr elf_header1,Elf64_Ehdr elf_header2,int argc,char** argv);
     void start();
     void error(const char* str, const int line);
-    void write_json(string );
+    void write_json(char* tmp);
 private:
     Elf64_Ehdr elf_header1;
     Elf64_Ehdr elf_header2;
