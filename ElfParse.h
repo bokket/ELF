@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <jsoncpp/json/json.h>
 using namespace std;
 
 
@@ -58,19 +59,21 @@ typedef struct
 class ElfParse
 {
 public:
-    ElfParse( Elf64_Ehdr elf_header1_,Elf64_Ehdr elf_header2_)
+    explicit ElfParse( Elf64_Ehdr elf_header1_,Elf64_Ehdr elf_header2_)
             :elf_header1(elf_header1_)
             ,elf_header2(elf_header2_)
     {}
     ~ElfParse(){}
 //读取文件头函数
-    void fileheader(Elf64_Ehdr elf_header1,Elf64_Ehdr elf_header2,int argc,char** argv);
+    char* fileheader(Elf64_Ehdr elf_header1,Elf64_Ehdr elf_header2,int argc,char** argv);
     void start();
     void error(const char* str, const int line);
-
+    void write_json(string );
 private:
     Elf64_Ehdr elf_header1;
     Elf64_Ehdr elf_header2;
+    char s3[EI_NIDENT*2];
+
 };
 
 int my_strcmp (char * str1,char * str2 );

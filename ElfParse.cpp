@@ -3,14 +3,13 @@
 //
 
 #include "ElfParse.h"
-void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int argc, char **argv)
+char* ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int argc, char **argv)
 {
     if(argc<3)
     {
         error("option error",__LINE__);
         exit(1);
     }
-
     int fd;
     int fd1;
     fd=open(argv[1],O_RDONLY);
@@ -36,11 +35,12 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
 
     char elf_type[4] = {0x7f, 0x45, 0x4c, 0x46};
 
-    string s1;
-    string s2;
-
+    char s1[EI_NIDENT];
+    char s2[EI_NIDENT];
+    //char s3[EI_NIDENT*2];
    // const char* s1;
    // const char* s2;
+
 
     if(elf_header1.e_ident[0]==0x7f && elf_header1.e_ident[1]==0x45 && elf_header1.e_ident[2]==0x4c && elf_header1.e_ident[3]==0x46
     && elf_header2.e_ident[0]==0x7f && elf_header2.e_ident[1]==0x45 && elf_header2.e_ident[2]==0x4c && elf_header2.e_ident[3]==0x46)
@@ -55,8 +55,8 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
         {
             printf("%02X", elf_header1.e_ident[i]);
             putchar(' ');
-            s1=elf_header1.e_ident[i];
-
+            s1[i]=elf_header1.e_ident[i];
+            //printf("%x \n",s1[i]);
         }
         putchar('\n');
         printf("  Magic:   ");
@@ -64,35 +64,70 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
         {
             printf("%02X", elf_header2.e_ident[i]);
             putchar(' ');
-            s2=elf_header2.e_ident[i];
+            s2[i]=elf_header2.e_ident[i];
 
+            //printf("%x \n",s2[i]);
         }
-
-        /*if(s1.compare(s2)==0)
+        //if(s1.compare(s2)==0)
+        if(strcmp(s1,s2)==0)
         {
-            printf("1");
+            //printf("1");
             printf("\n\n\n\n");
-            printf("Magic diff:   ");
+            printf("Magic same:   ");
             putchar('\n');
             for(int i = 0;i<EI_NIDENT;++i)
             {
                 printf("%02X\t%02X",elf_header1.e_ident[i],elf_header2.e_ident[i]);
                 putchar('\n');
             }
+
+            for(int i = 0;i<EI_NIDENT;++i)
+            {
+                s3[i]=s1[i];
+                printf("%02x",s3[i]);
+                putchar(' ');
+            }
+            printf("\n");
+            int j=0;
+            for(int i = EI_NIDENT;i<EI_NIDENT*2;++i)
+            {
+                s3[i]=s2[j];
+                j++;
+                printf("%02x",s3[i]);
+                putchar(' ');
+            }
+            printf("\n");
+            return s3;
         }
         else
-        {*/
+        {
             printf("\n\n\n\n");
             printf("Magic diff:   ");
             putchar('\n');
+            for(int i = 0;i<EI_NIDENT;++i)
+            {
+                s3[i]=s1[i];
+                printf("%02X",s3[i]);
+                putchar(' ');
+            }
+            printf("\n");
+            int j=0;
+            for(int i = EI_NIDENT;i<EI_NIDENT*2;++i)
+            {
+                s3[i]=s2[j];
+                j++;
+                printf("%02X",s3[i]);
+                putchar(' ');
+            }
+            printf("\n");
 
-            for(int i = 4;i<EI_NIDENT;++i)
+            for(int i = 4;i<7;++i)
             {
                 switch (i)
                 {
                     case EI_CLASS:
                         if(s1[i]!=s2[i]) {
-                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m", elf_header1.e_ident[i],
+                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m\n", elf_header1.e_ident[i],
                                    elf_header2.e_ident[i], "EI_CLASS");
                             if (s1[i] == ELFCLASSNONE)
                                 printf("%s\t", "非法字符");
@@ -106,20 +141,25 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
                                 printf("%s\t", "32位");
                             if (s2[i] == ELFCLASS64)
                                 printf("%s\t", "64位");
-                            printf("\n");
                         }
+                        //strcat(tmp,s1[i]);
+                        //strcat(tmp,s2[i]);
+                        /*tmp.push_back(s1[i]);
+                        tmp.push_back(s2[i]);
+                        printf("\n");*/
                         break;
                     case EI_DATA:
                         if(s1[i]!=s2[i]) {
-                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m", elf_header1.e_ident[i], elf_header2.e_ident[i],"EI_DATA");
-                            if(s1[i]==ELFDATA2LSB)
-                                printf("%s\t","大端");
-                            if(s1[i]==ELFDATA2MSB)
-                                printf("%s\t\t","小端");
-                            if(s2[i]==ELFDATA2LSB)
-                                printf("%s\t","大端");
-                            if(s2[i]==ELFDATA2MSB)
-                                printf("%s\t\t","小端");
+                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m\n", elf_header1.e_ident[i],
+                                   elf_header2.e_ident[i], "EI_DATA");
+                            if (s1[i] == ELFDATA2LSB)
+                                printf("%s\t", "大端");
+                            if (s1[i] == ELFDATA2MSB)
+                                printf("%s\t\t", "小端");
+                            if (s2[i] == ELFDATA2LSB)
+                                printf("%s\t", "大端");
+                            if (s2[i] == ELFDATA2MSB)
+                                printf("%s\t\t", "小端");
                         }
                         printf("\n");
                         break;
@@ -135,7 +175,8 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
                     printf("%02X\t%02X",elf_header1.e_ident[i],elf_header2.e_ident[i]);*/
                // printf("\n");
             }
-        //}
+            return s3;
+        }
     }
     else
     {
