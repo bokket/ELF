@@ -22,20 +22,20 @@ typedef uint64_t Elf64_Off;  //64
 #define EI_NIDENT (16)
 
 #define EI_CLASS	4		/* File class byte index */
-#define ELFCLASSNONE	0		/* Invalid class */
-#define ELFCLASS32	1		/* 32-bit objects */
-#define ELFCLASS64	2		/* 64-bit objects */
+#define ELFCLASSNONE	00		/* Invalid class */
+#define ELFCLASS32	01		/* 32-bit objects */
+#define ELFCLASS64	02		/* 64-bit objects */
 
 
 #define EI_DATA		5		/* Data encoding byte index */
-#define ELFDATANONE	0		/* Invalid data encoding */
-#define ELFDATA2LSB	1		/* 2's complement, little endian */
-#define ELFDATA2MSB	2		/* 2's complement, big endian */
+#define ELFDATANONE	00		/* Invalid data encoding */
+#define ELFDATA2LSB	01		/* 2's complement, little endian */
+#define ELFDATA2MSB	02		/* 2's complement, big endian */
 
 
 #define EI_VERSION  6
-#define EV_NONE		0		/* Invalid ELF version */
-#define EV_CURRENT	1		/* Current version */
+#define EV_NONE		00		/* Invalid ELF version */
+#define EV_CURRENT	01		/* Current version */
 
 typedef struct
 {

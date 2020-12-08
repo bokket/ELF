@@ -91,13 +91,35 @@ void ElfParse::fileheader(Elf64_Ehdr elf_header1, Elf64_Ehdr elf_header2, int ar
                 switch (i)
                 {
                     case EI_CLASS:
-                        if(s1[i]!=s2[i])
-                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m",elf_header1.e_ident[i],elf_header2.e_ident[i],"EI_CLASS");
-                        printf("\n");
+                        if(s1[i]!=s2[i]) {
+                            printf("%02X\t%02X\t\t\033[41;33m %s \033[0m", elf_header1.e_ident[i],
+                                   elf_header2.e_ident[i], "EI_CLASS");
+                            if (s1[i] == ELFCLASSNONE)
+                                printf("%s\t", "非法字符");
+                            if (s1[i] == ELFCLASS32)
+                                printf("%s\t", "32位");
+                            if (s1[i] == ELFCLASS64)
+                                printf("%s\t", "64位");
+                            if (s2[i] == ELFCLASSNONE)
+                                printf("%s\t", "非法字符");
+                            if (s2[i] == ELFCLASS32)
+                                printf("%s\t", "32位");
+                            if (s2[i] == ELFCLASS64)
+                                printf("%s\t", "64位");
+                            printf("\n");
+                        }
                         break;
                     case EI_DATA:
                         if(s1[i]!=s2[i]) {
                             printf("%02X\t%02X\t\t\033[41;33m %s \033[0m", elf_header1.e_ident[i], elf_header2.e_ident[i],"EI_DATA");
+                            if(s1[i]==ELFDATA2LSB)
+                                printf("%s\t","大端");
+                            if(s1[i]==ELFDATA2MSB)
+                                printf("%s\t\t","小端");
+                            if(s2[i]==ELFDATA2LSB)
+                                printf("%s\t","大端");
+                            if(s2[i]==ELFDATA2MSB)
+                                printf("%s\t\t","小端");
                         }
                         printf("\n");
                         break;
