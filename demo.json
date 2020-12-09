@@ -1,18 +1,18 @@
 {
    "Diff" : [
       {
-         "FileType" : 1
+         "File Type" : 1
       },
       {
-         "FileType" : 2
+         "Other File Type" : 2
       }
    ],
    "Info" : {
-      "Byteorder" : "大端",
-      "FileType" : "32位",
-      "OtherByteorder" : "大端",
-      "TheMajorVersion" : "1",
-      "otherFileType" : "64位"
+      "Byte order" : "大端",
+      "File Type" : "32位",
+      "Other Byte order" : "大端",
+      "The Major Version" : "1",
+      "other File Type" : "64位"
    },
    "Magic" : [
       {

@@ -1,5 +1,5 @@
 //
-// Created by bokket on 2020/12/8.
+// Created by bokket on 2020/12/9.
 //
 
 #include "ElfParse.cpp"
@@ -11,18 +11,6 @@ int main(int argc,char* argv[])
     Elf64_Ehdr elf_header2;
     memset(&elf_header1,0,sizeof(elf_header1));
     memset(&elf_header2,0,sizeof(elf_header2));
-
     ElfParse elf(elf_header1,elf_header2);
-    //elf.fileheader(elf_header1,elf_header2,argc,argv);
-    char* tmp=elf.fileheader(elf_header1,elf_header2,argc,argv);
-
-    elf.write_json(tmp);
-   /* for(int i = 0;i<EI_NIDENT*2;++i)
-    {
-        printf("%02X",tmp[i]);
-        putchar(' ');
-    }
-    printf("\n");*/
-
-    //cout<<tmp<<endl;
+    elf.Start(elf,argc,argv);
 }

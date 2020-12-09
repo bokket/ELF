@@ -209,7 +209,6 @@ void ElfParse::write_json(char* tmp) {
     if ((strncmp(elf_type, tmp, 4))==0)
     {
         for (int i = 0; i < 4; i++){
-
             item["key"]=elf_type[i];
             arrayObject.append(item);
            // printf("%0x ",elf_type[i]);
@@ -217,7 +216,6 @@ void ElfParse::write_json(char* tmp) {
         }
     }
     root["Magic"]=arrayObject;
-    root["Name"] = Json::Value("ELF header");
 
 
     Json::Value Info;
@@ -282,6 +280,8 @@ void ElfParse::write_json(char* tmp) {
 
     root["Info"] = Json::Value(Info);
     root["Diff"]=Json::Value(Diff);
+    root["Name"] = Json::Value("ELF header");
+
 
     cout << "StyledWriter:" << endl;
     Json::StyledWriter bw;
@@ -305,3 +305,18 @@ void ElfParse::write_json(char* tmp) {
     os.close();*/
 }
 
+void ElfParse::Start(ElfParse &elf, int argc, char **argv)
+{
+    //elf.fileheader(elf_header1,elf_header2,argc,argv);
+    char* tmp=elf.fileheader(elf_header1,elf_header2,argc,argv);
+
+    elf.write_json(tmp);
+    /* for(int i = 0;i<EI_NIDENT*2;++i)
+     {
+         printf("%02X",tmp[i]);
+         putchar(' ');
+     }
+     printf("\n");*/
+
+    //cout<<tmp<<endl;
+}

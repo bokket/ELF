@@ -10,6 +10,7 @@ xhr.onreadystatechange = function () {
         if ((xhr.status >= 200 && xhr.status < 300) || xhr.status == 304) {
             mes = JSON.parse(xhr.responseText);
             console.log(mes);
+            console.log(123);
             console.log(mes.Diff);
             const app = new Vue({
                 el: '#app',

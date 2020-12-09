@@ -71,7 +71,7 @@ public:
     ~ElfParse(){}
 //读取文件头函数
     char* fileheader(Elf64_Ehdr elf_header1,Elf64_Ehdr elf_header2,int argc,char** argv);
-    void start();
+    void Start(ElfParse & elf,int argc,char** argv);
     void error(const char* str, const int line);
     void write_json(char* tmp);
 private:
