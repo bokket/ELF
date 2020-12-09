@@ -1,10 +1,32 @@
 {
+   "Diff" : [
+      {
+         "FileType" : 1
+      },
+      {
+         "FileType" : 2
+      }
+   ],
    "Info" : {
-      "Byte order" : "大端",
-      "File Type" : "32位",
-      "The Major Version" : "1",
-      "other Byte order" : "大端",
-      "other File Type" : "64位"
+      "Byteorder" : "大端",
+      "FileType" : "32位",
+      "OtherByteorder" : "大端",
+      "TheMajorVersion" : "1",
+      "otherFileType" : "64位"
    },
-   "name" : "ELF header"
+   "Magic" : [
+      {
+         "key" : 127
+      },
+      {
+         "key" : 69
+      },
+      {
+         "key" : 76
+      },
+      {
+         "key" : 70
+      }
+   ],
+   "Name" : "ELF header"
 }

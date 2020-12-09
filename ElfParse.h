@@ -15,6 +15,9 @@
 #include <jsoncpp/json/json.h>
 #include <fstream>
 #include <cassert>
+#include <boost/format.hpp>
+#include <sstream>
+#include "noncopyable.h"
 using namespace std;
 
 
@@ -58,7 +61,7 @@ typedef struct
     Elf64_Half    e_shstrndx;             /* 字符串表索引节头 */
 } Elf64_Ehdr;
 
-class ElfParse
+class ElfParse:Noncopyable
 {
 public:
     explicit ElfParse( Elf64_Ehdr elf_header1_,Elf64_Ehdr elf_header2_)
