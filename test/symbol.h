@@ -2,64 +2,208 @@
 #include <linux/elf.h>
 #include <bfd.h>
 #include <getopt.h>
+int			show_name;
 
 
-static bfd_boolean process_section_headers (Filedata * filedata)
+int			do_dynamic;
+int			do_dump;
+int			do_syms;
+int			do_reloc;
+int			do_sections;
+int			do_using_dynamic;
+int			do_debugging;
+int                     do_debug_info;
+int                     do_debug_abbrevs;
+int                     do_debug_lines;
+int                     do_debug_pubnames;
+int                     do_debug_aranges;
+int                     do_debug_frames;
+int                     do_debug_frames_interp;
+int			do_debug_macinfo;
+int			do_debug_str;
+int                     do_debug_loc;
+int                     do_arch;
+int                     do_notes;
+
+int			is_32bit_elf;
+
+
+/* How to rpint a vma value.  */
+//如何打印vma值
+typedef enum print_mode
+{
+  HEX,
+  DEC,
+  DEC_5,
+  UNSIGNED,
+  PREFIX_HEX,
+  FULL_HEX,
+  LONG_HEX
+}
+print_mode;
+
+
+#define BYTE_GET(field)	byte_get (field, sizeof (field))
+
+static bfd_vma            byte_get_little_endian      PARAMS ((unsigned char *, int));
+static bfd_vma            byte_get_big_endian         PARAMS ((unsigned char *, int));
+
+static int                get_32bit_section_headers   PARAMS ((FILE *, unsigned int));
+static int                get_64bit_section_headers   PARAMS ((FILE *, unsigned int));
+
+static const char *       get_section_type_name       PARAMS ((unsigned int));
+
+
+
+#define SECTION_NAME(X)	((X) == NULL ? "<none>" : \
+				 ((X)->sh_name >= string_table_length \
+				  ? "<corrupt>" : string_table + (X)->sh_name))
+
+#define SECTION_HEADER(I) (section_headers + SECTION_HEADER_INDEX (I))
+
+/* Given st_shndx I, map to section_headers index.  */
+//给定st_shndx I，映射到section_headers索引。
+//地址找法？
+#define SECTION_HEADER_INDEX(I)				\
+  ((I) < SHN_LORESERVE					\
+   ? (I)						\
+   : ((I) <= SHN_HIRESERVE				\
+      ? 0						\
+      : (I) - (SHN_HIRESERVE + 1 - SHN_LORESERVE)))
+
+#define GET_ELF_SYMBOLS(file, section)			\
+  (is_32bit_elf ? get_32bit_elf_symbols (file, section)	\
+   : get_64bit_elf_symbols (file, section))
+
+/* Reverse of the above.  */
+//与上述相反
+#define SECTION_HEADER_NUM(N)				\
+  ((N) < SHN_LORESERVE					\
+   ? (N)						\
+   : (N) + (SHN_HIRESERVE + 1 - SHN_LORESERVE))
+
+
+#define OPTION_DEBUG_DUMP	512
+struct option options [] =
+{
+  {"all",              no_argument, 0, 'a'},
+  {"file-header",      no_argument, 0, 'h'},
+  {"program-headers",  no_argument, 0, 'l'},
+  {"headers",          no_argument, 0, 'e'},
+  {"histogram",        no_argument, 0, 'I'},
+  {"segments",         no_argument, 0, 'l'},
+  {"sections",         no_argument, 0, 'S'},
+  {"section-headers",  no_argument, 0, 'S'},
+  {"symbols",          no_argument, 0, 's'},
+  {"syms",             no_argument, 0, 's'},
+  {"relocs",           no_argument, 0, 'r'},
+  {"notes",            no_argument, 0, 'n'},
+  {"dynamic",          no_argument, 0, 'd'},
+  {"arch-specific",    no_argument, 0, 'A'},
+  {"version-info",     no_argument, 0, 'V'},
+  {"use-dynamic",      no_argument, 0, 'D'},
+  {"hex-dump",         required_argument, 0, 'x'},
+  {"debug-dump",       optional_argument, 0, OPTION_DEBUG_DUMP},
+  {"unwind",	       no_argument, 0, 'u'},
+#ifdef SUPPORT_DISASSEMBLY
+  {"instruction-dump", required_argument, 0, 'i'},
+#endif
+
+  {"version",          no_argument, 0, 'v'},
+  {"wide",             no_argument, 0, 'W'},
+  {"help",             no_argument, 0, 'H'},
+  {0,                  no_argument, 0, 0}
+};
+
+static void usage ()
+{
+  fprintf (stdout, _("Usage: readelf <option(s)> elf-file(s)\n"));
+  fprintf (stdout, _(" Display information about the contents of ELF format files\n"));
+  fprintf (stdout, _(" Options are:\n\
+  -a --all               Equivalent to: -h -l -S -s -r -d -V -A -I\n\
+  -h --file-header       Display the ELF file header\n\
+  -l --program-headers   Display the program headers\n\
+     --segments          An alias for --program-headers\n\
+  -S --section-headers   Display the sections' header\n\
+     --sections          An alias for --section-headers\n\
+  -e --headers           Equivalent to: -h -l -S\n\
+  -s --syms              Display the symbol table\n\
+      --symbols          An alias for --syms\n\
+  -n --notes             Display the core notes (if present)\n\
+  -r --relocs            Display the relocations (if present)\n\
+  -u --unwind            Display the unwind info (if present)\n\
+  -d --dynamic           Display the dynamic segment (if present)\n\
+  -V --version-info      Display the version sections (if present)\n\
+  -A --arch-specific     Display architecture specific information (if any).\n\
+  -D --use-dynamic       Use the dynamic section info when displaying symbols\n\
+  -x --hex-dump=<number> Dump the contents of section <number>\n\
+  -w[liaprmfFso] or\n\
+  --debug-dump[=line,=info,=abbrev,=pubnames,=ranges,=macro,=frames,=str,=loc]\n\
+                         Display the contents of DWARF2 debug sections\n"));
+#ifdef SUPPORT_DISASSEMBLY
+  fprintf (stdout, _("\
+  -i --instruction-dump=<number>\n\
+                         Disassemble the contents of section <number>\n"));
+#endif
+  fprintf (stdout, _("\
+  -I --histogram         Display histogram of bucket list lengths\n\
+  -W --wide              Allow output width to exceed 80 characters\n\
+  -H --help              Display this information\n\
+  -v --version           Display the version number of readelf\n"));
+  fprintf (stdout, _("Report bugs to %s\n"), REPORT_BUGS_TO);
+
+  exit (0);
+}
+
+
+static void warn VPARAMS ((const char *message, ...))
+{
+  VA_OPEN (args, message);
+  VA_FIXEDARG (args, const char *, message);
+
+  fprintf (stderr, _("%s: Warning: "), program_name);
+  vfprintf (stderr, message, args);
+  VA_CLOSE (args);
+}
+
+
+
+static int process_section_headers (FILE * file)
 {
   Elf_Internal_Shdr * section;
-  unsigned int i;
+  unsigned int        i;
 
-  filedata->section_headers = NULL;
+  section_headers = NULL;
 
-  if (filedata->file_header.e_shnum == 0)
+  if (elf_header.e_shnum == 0)
     {
-      /* PR binutils/12467.  */
-      if (filedata->file_header.e_shoff != 0)
-	{
-	  warn (_("possibly corrupt ELF file header - it has a non-zero"
-		  " section header offset, but no section headers\n"));
-	  return FALSE;
-	}
-      else if (do_sections)
+      if (do_sections)
 	printf (_("\nThere are no sections in this file.\n"));
 
-      return TRUE;
+      return 1;
     }
 
   if (do_sections && !do_header)
-    printf (ngettext ("There is %d section header, "
-		      "starting at offset 0x%lx:\n",
-		      "There are %d section headers, "
-		      "starting at offset 0x%lx:\n",
-		      filedata->file_header.e_shnum),
-	    filedata->file_header.e_shnum,
-	    (unsigned long) filedata->file_header.e_shoff);
+    printf (_("There are %d section headers, starting at offset 0x%lx:\n"),
+	    elf_header.e_shnum, (unsigned long) elf_header.e_shoff);
 
   if (is_32bit_elf)
     {
-      if (! get_32bit_section_headers (filedata, FALSE))
-	return FALSE;
+      if (! get_32bit_section_headers (file, elf_header.e_shnum))
+	return 0;
     }
-  else
-    {
-      if (! get_64bit_section_headers (filedata, FALSE))
-	return FALSE;
-    }
+  else if (! get_64bit_section_headers (file, elf_header.e_shnum))
+    return 0;
 
   /* Read in the string table, so that we have names to display.  */
-  if (filedata->file_header.e_shstrndx != SHN_UNDEF
-       && filedata->file_header.e_shstrndx < filedata->file_header.e_shnum)
+  section = SECTION_HEADER (elf_header.e_shstrndx);
+
+  if (section->sh_size != 0)
     {
-      section = filedata->section_headers + filedata->file_header.e_shstrndx;
+      string_table = (char *) get_data (NULL, file, section->sh_offset,
+					section->sh_size, _("string table"));
 
-      if (section->sh_size != 0)
-	{
-	  filedata->string_table = (char *) get_data (NULL, filedata, section->sh_offset,
-						      1, section->sh_size,
-						      _("string table"));
-
-	  filedata->string_table_length = filedata->string_table != NULL ? section->sh_size : 0;
-	}
+      string_table_length = section->sh_size;
     }
 
   /* Scan the sections for the dynamic symbol table
@@ -67,81 +211,10 @@ static bfd_boolean process_section_headers (Filedata * filedata)
   dynamic_symbols = NULL;
   dynamic_strings = NULL;
   dynamic_syminfo = NULL;
-  symtab_shndx_list = NULL;
 
-  eh_addr_size = is_32bit_elf ? 4 : 8;
-  switch (filedata->file_header.e_machine)
-    {
-    case EM_MIPS:
-    case EM_MIPS_RS3_LE:
-      /* The 64-bit MIPS EABI uses a combination of 32-bit ELF and 64-bit
-	 FDE addresses.  However, the ABI also has a semi-official ILP32
-	 variant for which the normal FDE address size rules apply.
-
-	 GCC 4.0 marks EABI64 objects with a dummy .gcc_compiled_longXX
-	 section, where XX is the size of longs in bits.  Unfortunately,
-	 earlier compilers provided no way of distinguishing ILP32 objects
-	 from LP64 objects, so if there's any doubt, we should assume that
-	 the official LP64 form is being used.  */
-      if ((filedata->file_header.e_flags & EF_MIPS_ABI) == E_MIPS_ABI_EABI64
-	  && find_section (filedata, ".gcc_compiled_long32") == NULL)
-	eh_addr_size = 8;
-      break;
-
-    case EM_H8_300:
-    case EM_H8_300H:
-      switch (filedata->file_header.e_flags & EF_H8_MACH)
-	{
-	case E_H8_MACH_H8300:
-	case E_H8_MACH_H8300HN:
-	case E_H8_MACH_H8300SN:
-	case E_H8_MACH_H8300SXN:
-	  eh_addr_size = 2;
-	  break;
-	case E_H8_MACH_H8300H:
-	case E_H8_MACH_H8300S:
-	case E_H8_MACH_H8300SX:
-	  eh_addr_size = 4;
-	  break;
-	}
-      break;
-
-    case EM_M32C_OLD:
-    case EM_M32C:
-      switch (filedata->file_header.e_flags & EF_M32C_CPU_MASK)
-	{
-	case EF_M32C_CPU_M16C:
-	  eh_addr_size = 2;
-	  break;
-	}
-      break;
-    }
-
-#define CHECK_ENTSIZE_VALUES(section, i, size32, size64)		\
-  do									\
-    {									\
-      bfd_size_type expected_entsize = is_32bit_elf ? size32 : size64;	\
-      if (section->sh_entsize != expected_entsize)			\
-	{								\
-	  char buf[40];							\
-	  sprintf_vma (buf, section->sh_entsize);			\
-	  /* Note: coded this way so that there is a single string for  \
-	     translation.  */ \
-	  error (_("Section %d has invalid sh_entsize of %s\n"), i, buf); \
-	  error (_("(Using the expected size of %u for the rest of this dump)\n"), \
-		   (unsigned) expected_entsize);			\
-	  section->sh_entsize = expected_entsize;			\
-	}								\
-    }									\
-  while (0)
-
-#define CHECK_ENTSIZE(section, i, type)					\
-  CHECK_ENTSIZE_VALUES (section, i, sizeof (Elf32_External_##type),	    \
-			sizeof (Elf64_External_##type))
-
-  for (i = 0, section = filedata->section_headers;
-       i < filedata->file_header.e_shnum;
-       i++, section++)
+  for (i = 0, section = section_headers;
+       i < elf_header.e_shnum;
+       i ++, section ++)
     {
       char * name = SECTION_NAME (section);
 
@@ -153,11 +226,11 @@ static bfd_boolean process_section_headers (Filedata * filedata)
 	      continue;
 	    }
 
-	  CHECK_ENTSIZE (section, i, Sym);
-	  dynamic_symbols = GET_ELF_SYMBOLS (filedata, section, & num_dynamic_syms);
+	  num_dynamic_syms = section->sh_size / section->sh_entsize;
+	  dynamic_symbols = GET_ELF_SYMBOLS (file, section);
 	}
       else if (section->sh_type == SHT_STRTAB
-	       && streq (name, ".dynstr"))
+	       && strcmp (name, ".dynstr") == 0)
 	{
 	  if (dynamic_strings != NULL)
 	    {
@@ -165,291 +238,79 @@ static bfd_boolean process_section_headers (Filedata * filedata)
 	      continue;
 	    }
 
-	  dynamic_strings = (char *) get_data (NULL, filedata, section->sh_offset,
-                                               1, section->sh_size,
-                                               _("dynamic strings"));
-	  dynamic_strings_length = dynamic_strings == NULL ? 0 : section->sh_size;
+	  dynamic_strings = (char *) get_data (NULL, file, section->sh_offset,
+					       section->sh_size,
+					       _("dynamic strings"));
 	}
       else if (section->sh_type == SHT_SYMTAB_SHNDX)
 	{
-	  elf_section_list * entry = xmalloc (sizeof * entry);
-
-	  entry->hdr = section;
-	  entry->next = symtab_shndx_list;
-	  symtab_shndx_list = entry;
+	  if (symtab_shndx_hdr != NULL)
+	    {
+	      error (_("File contains multiple symtab shndx tables\n"));
+	      continue;
+	    }
+	  symtab_shndx_hdr = section;
 	}
-      else if (section->sh_type == SHT_SYMTAB)
-	CHECK_ENTSIZE (section, i, Sym);
-      else if (section->sh_type == SHT_GROUP)
-	CHECK_ENTSIZE_VALUES (section, i, GRP_ENTRY_SIZE, GRP_ENTRY_SIZE);
-      else if (section->sh_type == SHT_REL)
-	CHECK_ENTSIZE (section, i, Rel);
-      else if (section->sh_type == SHT_RELA)
-	CHECK_ENTSIZE (section, i, Rela);
       else if ((do_debugging || do_debug_info || do_debug_abbrevs
-		|| do_debug_lines || do_debug_pubnames || do_debug_pubtypes
-		|| do_debug_aranges || do_debug_frames || do_debug_macinfo
-		|| do_debug_str || do_debug_loc || do_debug_ranges
-		|| do_debug_addr || do_debug_cu_index || do_debug_links)
-	       && (const_strneq (name, ".debug_")
-                   || const_strneq (name, ".zdebug_")))
+		|| do_debug_lines || do_debug_pubnames || do_debug_aranges
+		|| do_debug_frames || do_debug_macinfo || do_debug_str
+		|| do_debug_loc)
+	       && strncmp (name, ".debug_", 7) == 0)
 	{
-          if (name[1] == 'z')
-            name += sizeof (".zdebug_") - 1;
-          else
-            name += sizeof (".debug_") - 1;
+	  name += 7;
 
 	  if (do_debugging
-	      || (do_debug_info     && const_strneq (name, "info"))
-	      || (do_debug_info     && const_strneq (name, "types"))
-	      || (do_debug_abbrevs  && const_strneq (name, "abbrev"))
-	      || (do_debug_lines    && strcmp (name, "line") == 0)
-	      || (do_debug_lines    && const_strneq (name, "line."))
-	      || (do_debug_pubnames && const_strneq (name, "pubnames"))
-	      || (do_debug_pubtypes && const_strneq (name, "pubtypes"))
-	      || (do_debug_pubnames && const_strneq (name, "gnu_pubnames"))
-	      || (do_debug_pubtypes && const_strneq (name, "gnu_pubtypes"))
-	      || (do_debug_aranges  && const_strneq (name, "aranges"))
-	      || (do_debug_ranges   && const_strneq (name, "ranges"))
-	      || (do_debug_ranges   && const_strneq (name, "rnglists"))
-	      || (do_debug_frames   && const_strneq (name, "frame"))
-	      || (do_debug_macinfo  && const_strneq (name, "macinfo"))
-	      || (do_debug_macinfo  && const_strneq (name, "macro"))
-	      || (do_debug_str      && const_strneq (name, "str"))
-	      || (do_debug_loc      && const_strneq (name, "loc"))
-	      || (do_debug_loc      && const_strneq (name, "loclists"))
-	      || (do_debug_addr     && const_strneq (name, "addr"))
-	      || (do_debug_cu_index && const_strneq (name, "cu_index"))
-	      || (do_debug_cu_index && const_strneq (name, "tu_index"))
+	      || (do_debug_info     && (strcmp (name, "info") == 0))
+	      || (do_debug_abbrevs  && (strcmp (name, "abbrev") == 0))
+	      || (do_debug_lines    && (strcmp (name, "line") == 0))
+	      || (do_debug_pubnames && (strcmp (name, "pubnames") == 0))
+	      || (do_debug_aranges  && (strcmp (name, "aranges") == 0))
+	      || (do_debug_frames   && (strcmp (name, "frame") == 0))
+	      || (do_debug_macinfo  && (strcmp (name, "macinfo") == 0))
+	      || (do_debug_str      && (strcmp (name, "str") == 0))
+	      || (do_debug_loc      && (strcmp (name, "loc") == 0))
 	      )
-	    request_dump_bynumber (filedata, i, DEBUG_DUMP);
+	    request_dump (i, DEBUG_DUMP);
 	}
-      /* Linkonce section to be combined with .debug_info at link time.  */
+      /* linkonce section to be combined with .debug_info at link time.  */
       else if ((do_debugging || do_debug_info)
-	       && const_strneq (name, ".gnu.linkonce.wi."))
-	request_dump_bynumber (filedata, i, DEBUG_DUMP);
-      else if (do_debug_frames && streq (name, ".eh_frame"))
-	request_dump_bynumber (filedata, i, DEBUG_DUMP);
-      else if (do_gdb_index && (streq (name, ".gdb_index")
-				|| streq (name, ".debug_names")))
-	request_dump_bynumber (filedata, i, DEBUG_DUMP);
-      /* Trace sections for Itanium VMS.  */
-      else if ((do_debugging || do_trace_info || do_trace_abbrevs
-                || do_trace_aranges)
-	       && const_strneq (name, ".trace_"))
-	{
-          name += sizeof (".trace_") - 1;
-
-	  if (do_debugging
-	      || (do_trace_info     && streq (name, "info"))
-	      || (do_trace_abbrevs  && streq (name, "abbrev"))
-	      || (do_trace_aranges  && streq (name, "aranges"))
-	      )
-	    request_dump_bynumber (filedata, i, DEBUG_DUMP);
-	}
-      else if ((do_debugging || do_debug_links)
-	       && (const_strneq (name, ".gnu_debuglink")
-		   || const_strneq (name, ".gnu_debugaltlink")))
-	request_dump_bynumber (filedata, i, DEBUG_DUMP);
+	       && strncmp (name, ".gnu.linkonce.wi.", 17) == 0)
+	request_dump (i, DEBUG_DUMP);
+      else if (do_debug_frames && strcmp (name, ".eh_frame") == 0)
+	request_dump (i, DEBUG_DUMP);
     }
 
   if (! do_sections)
-    return TRUE;
+    return 1;
 
-  if (filedata->file_header.e_shnum > 1)
+  if (elf_header.e_shnum > 1)
     printf (_("\nSection Headers:\n"));
   else
     printf (_("\nSection Header:\n"));
 
   if (is_32bit_elf)
-    {
-      if (do_section_details)
-	{
-	  printf (_("  [Nr] Name\n"));
-	  printf (_("       Type            Addr     Off    Size   ES   Lk Inf Al\n"));
-	}
-      else
-	printf
-	  (_("  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n"));
-    }
+    printf
+      (_("  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n"));
   else if (do_wide)
-    {
-      if (do_section_details)
-	{
-	  printf (_("  [Nr] Name\n"));
-	  printf (_("       Type            Address          Off    Size   ES   Lk Inf Al\n"));
-	}
-      else
-	printf
-	  (_("  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al\n"));
-    }
+    printf
+      (_("  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al\n"));
   else
     {
-      if (do_section_details)
-	{
-	  printf (_("  [Nr] Name\n"));
-	  printf (_("       Type              Address          Offset            Link\n"));
-	  printf (_("       Size              EntSize          Info              Align\n"));
-	}
-      else
-	{
-	  printf (_("  [Nr] Name              Type             Address           Offset\n"));
-	  printf (_("       Size              EntSize          Flags  Link  Info  Align\n"));
-	}
+      printf (_("  [Nr] Name              Type             Address           Offset\n"));
+      printf (_("       Size              EntSize          Flags  Link  Info  Align\n"));
     }
 
-  if (do_section_details)
-    printf (_("       Flags\n"));
-
-  for (i = 0, section = filedata->section_headers;
-       i < filedata->file_header.e_shnum;
-       i++, section++)
+  for (i = 0, section = section_headers;
+       i < elf_header.e_shnum;
+       i ++, section ++)
     {
-      /* Run some sanity checks on the section header.  */
-
-      /* Check the sh_link field.  */
-      switch (section->sh_type)
-	{
-	case SHT_REL:
-	case SHT_RELA:
-	  if (section->sh_link == 0
-	      && (filedata->file_header.e_type == ET_EXEC
-		  || filedata->file_header.e_type == ET_DYN))
-	    /* A dynamic relocation section where all entries use a
-	       zero symbol index need not specify a symtab section.  */
-	    break;
-	  /* Fall through.  */
-	case SHT_SYMTAB_SHNDX:
-	case SHT_GROUP:
-	case SHT_HASH:
-	case SHT_GNU_HASH:
-	case SHT_GNU_versym:
-	  if (section->sh_link == 0
-	      || section->sh_link >= filedata->file_header.e_shnum
-	      || (filedata->section_headers[section->sh_link].sh_type != SHT_SYMTAB
-		  && filedata->section_headers[section->sh_link].sh_type != SHT_DYNSYM))
-	    warn (_("[%2u]: Link field (%u) should index a symtab section.\n"),
-		  i, section->sh_link);
-	  break;
-
-	case SHT_DYNAMIC:
-	case SHT_SYMTAB:
-	case SHT_DYNSYM:
-	case SHT_GNU_verneed:
-	case SHT_GNU_verdef:
-	case SHT_GNU_LIBLIST:
-	  if (section->sh_link == 0
-	      || section->sh_link >= filedata->file_header.e_shnum
-	      || filedata->section_headers[section->sh_link].sh_type != SHT_STRTAB)
-	    warn (_("[%2u]: Link field (%u) should index a string section.\n"),
-		  i, section->sh_link);
-	  break;
-
-	case SHT_INIT_ARRAY:
-	case SHT_FINI_ARRAY:
-	case SHT_PREINIT_ARRAY:
-	  if (section->sh_type < SHT_LOOS && section->sh_link != 0)
-	    warn (_("[%2u]: Unexpected value (%u) in link field.\n"),
-		  i, section->sh_link);
-	  break;
-
-	default:
-	  /* FIXME: Add support for target specific section types.  */
-#if 0 	  /* Currently we do not check other section types as there are too
-	     many special cases.  Stab sections for example have a type
-	     of SHT_PROGBITS but an sh_link field that links to the .stabstr
-	     section.  */
-	  if (section->sh_type < SHT_LOOS && section->sh_link != 0)
-	    warn (_("[%2u]: Unexpected value (%u) in link field.\n"),
-		  i, section->sh_link);
-#endif
-	  break;
-	}
-
-      /* Check the sh_info field.  */
-      switch (section->sh_type)
-	{
-	case SHT_REL:
-	case SHT_RELA:
-	  if (section->sh_info == 0
-	      && (filedata->file_header.e_type == ET_EXEC
-		  || filedata->file_header.e_type == ET_DYN))
-	    /* Dynamic relocations apply to segments, so they do not
-	       need to specify the section they relocate.  */
-	    break;
-	  if (section->sh_info == 0
-	      || section->sh_info >= filedata->file_header.e_shnum
-	      || (filedata->section_headers[section->sh_info].sh_type != SHT_PROGBITS
-		  && filedata->section_headers[section->sh_info].sh_type != SHT_NOBITS
-		  && filedata->section_headers[section->sh_info].sh_type != SHT_NOTE
-		  && filedata->section_headers[section->sh_info].sh_type != SHT_INIT_ARRAY
-		  && filedata->section_headers[section->sh_info].sh_type != SHT_FINI_ARRAY
-		  && filedata->section_headers[section->sh_info].sh_type != SHT_PREINIT_ARRAY
-		  /* FIXME: Are other section types valid ?  */
-		  && filedata->section_headers[section->sh_info].sh_type < SHT_LOOS))
-	    warn (_("[%2u]: Info field (%u) should index a relocatable section.\n"),
-		  i, section->sh_info);
-	  break;
-
-	case SHT_DYNAMIC:
-	case SHT_HASH:
-	case SHT_SYMTAB_SHNDX:
-	case SHT_INIT_ARRAY:
-	case SHT_FINI_ARRAY:
-	case SHT_PREINIT_ARRAY:
-	  if (section->sh_info != 0)
-	    warn (_("[%2u]: Unexpected value (%u) in info field.\n"),
-		  i, section->sh_info);
-	  break;
-
-	case SHT_GROUP:
-	case SHT_SYMTAB:
-	case SHT_DYNSYM:
-	  /* A symbol index - we assume that it is valid.  */
-	  break;
-
-	default:
-	  /* FIXME: Add support for target specific section types.  */
-	  if (section->sh_type == SHT_NOBITS)
-	    /* NOBITS section headers with non-zero sh_info fields can be
-	       created when a binary is stripped of everything but its debug
-	       information.  The stripped sections have their headers
-	       preserved but their types set to SHT_NOBITS.  So do not check
-	       this type of section.  */
-	    ;
-	  else if (section->sh_flags & SHF_INFO_LINK)
-	    {
-	      if (section->sh_info < 1 || section->sh_info >= filedata->file_header.e_shnum)
-		warn (_("[%2u]: Expected link to another section in info field"), i);
-	    }
-	  else if (section->sh_type < SHT_LOOS
-		   && (section->sh_flags & SHF_GNU_MBIND) == 0
-		   && section->sh_info != 0)
-	    warn (_("[%2u]: Unexpected value (%u) in info field.\n"),
-		  i, section->sh_info);
-	  break;
-	}
-
-      /* Check the sh_size field.  */
-      if (section->sh_size > filedata->file_size
-	  && section->sh_type != SHT_NOBITS
-	  && section->sh_type != SHT_NULL
-	  && section->sh_type < SHT_LOOS)
-	warn (_("Size of section %u is larger than the entire file!\n"), i);
-
-      printf ("  [%2u] ", i);
-      if (do_section_details)
-	printf ("%s\n      ", printable_section_name (filedata, section));
-      else
-	print_symbol (-17, SECTION_NAME (section));
-
-      printf (do_wide ? " %-15s " : " %-15.15s ",
-	      get_section_type_name (filedata, section->sh_type));
+      printf ("  [%2u] %-17.17s %-15.15s ",
+	      SECTION_HEADER_NUM (i),
+	      SECTION_NAME (section),
+	      get_section_type_name (section->sh_type));
 
       if (is_32bit_elf)
 	{
-	  const char * link_too_big = NULL;
-
 	  print_vma (section->sh_addr, LONG_HEX);
 
 	  printf ( " %6.6lx %6.6lx %2.2lx",
@@ -457,63 +318,12 @@ static bfd_boolean process_section_headers (Filedata * filedata)
 		   (unsigned long) section->sh_size,
 		   (unsigned long) section->sh_entsize);
 
-	  if (do_section_details)
-	    fputs ("  ", stdout);
-	  else
-	    printf (" %3s ", get_elf_section_flags (filedata, section->sh_flags));
+	  printf (" %3s ", get_elf_section_flags (section->sh_flags));
 
-	  if (section->sh_link >= filedata->file_header.e_shnum)
-	    {
-	      link_too_big = "";
-	      /* The sh_link value is out of range.  Normally this indicates
-		 an error but it can have special values in Solaris binaries.  */
-	      switch (filedata->file_header.e_machine)
-		{
-		case EM_386:
-		case EM_IAMCU:
-        
-        //#define EM_X86_64	62	/* AMD x86-64 */
-		case EM_X86_64:
-		
-        case EM_L1OM:
-		case EM_K1OM:
-		case EM_OLD_SPARCV9:
-        
-        //#define EM_SPARC32PLUS	18	/* Sun's "v8plus" */
-        case EM_SPARC32PLUS:
-		//#define EM_SPARCV9	43	/* SPARC v9 64-bit */
-        case EM_SPARCV9:
-
-        //#define EM_SPARC	2
-		case EM_SPARC:
-		  if (section->sh_link == (SHN_BEFORE & 0xffff))
-		    link_too_big = "BEFORE";
-		  else if (section->sh_link == (SHN_AFTER & 0xffff))
-		    link_too_big = "AFTER";
-		  break;
-		default:
-		  break;
-		}
-	    }
-
-	  if (do_section_details)
-	    {
-	      if (link_too_big != NULL && * link_too_big)
-		printf ("<%s> ", link_too_big);
-	      else
-		printf ("%2u ", section->sh_link);
-	      printf ("%3u %2lu\n", section->sh_info,
-		      (unsigned long) section->sh_addralign);
-	    }
-	  else
-	    printf ("%2u %3u %2lu\n",
-		    section->sh_link,
-		    section->sh_info,
-		    (unsigned long) section->sh_addralign);
-
-	  if (link_too_big && ! * link_too_big)
-	    warn (_("section %u: sh_link value of %u is larger than the number of sections\n"),
-		  i, section->sh_link);
+	  printf ("%2ld %3lx %2ld\n",
+		  (unsigned long) section->sh_link,
+		  (unsigned long) section->sh_info,
+		  (unsigned long) section->sh_addralign);
 	}
       else if (do_wide)
 	{
@@ -543,40 +353,19 @@ static bfd_boolean process_section_headers (Filedata * filedata)
 	      print_vma (section->sh_entsize, LONG_HEX);
 	    }
 
-	  if (do_section_details)
-	    fputs ("  ", stdout);
-	  else
-	    printf (" %3s ", get_elf_section_flags (filedata, section->sh_flags));
+	  printf (" %3s ", get_elf_section_flags (section->sh_flags));
 
-	  printf ("%2u %3u ", section->sh_link, section->sh_info);
+	  printf ("%2ld %3lx ",
+		  (unsigned long) section->sh_link,
+		  (unsigned long) section->sh_info);
 
 	  if ((unsigned long) section->sh_addralign == section->sh_addralign)
-	    printf ("%2lu\n", (unsigned long) section->sh_addralign);
+	    printf ("%2ld\n", (unsigned long) section->sh_addralign);
 	  else
 	    {
 	      print_vma (section->sh_addralign, DEC);
 	      putchar ('\n');
 	    }
-	}
-      else if (do_section_details)
-	{
-	  putchar (' ');
-	  print_vma (section->sh_addr, LONG_HEX);
-	  if ((long) section->sh_offset == section->sh_offset)
-	    printf ("  %16.16lx", (unsigned long) section->sh_offset);
-	  else
-	    {
-	      printf ("  ");
-	      print_vma (section->sh_offset, LONG_HEX);
-	    }
-	  printf ("  %u\n       ", section->sh_link);
-	  print_vma (section->sh_size, LONG_HEX);
-	  putchar (' ');
-	  print_vma (section->sh_entsize, LONG_HEX);
-
-	  printf ("  %-16u  %lu\n",
-		  section->sh_info,
-		  (unsigned long) section->sh_addralign);
 	}
       else
 	{
@@ -594,110 +383,143 @@ static bfd_boolean process_section_headers (Filedata * filedata)
 	  printf ("  ");
 	  print_vma (section->sh_entsize, LONG_HEX);
 
-	  printf (" %3s ", get_elf_section_flags (filedata, section->sh_flags));
+	  printf (" %3s ", get_elf_section_flags (section->sh_flags));
 
-	  printf ("     %2u   %3u     %lu\n",
-		  section->sh_link,
-		  section->sh_info,
+	  printf ("     %2ld   %3lx     %ld\n",
+		  (unsigned long) section->sh_link,
+		  (unsigned long) section->sh_info,
 		  (unsigned long) section->sh_addralign);
 	}
-
-      if (do_section_details)
-	{
-	  printf ("       %s\n", get_elf_section_flags (filedata, section->sh_flags));
-	  if ((section->sh_flags & SHF_COMPRESSED) != 0)
-	    {
-	      /* Minimum section size is 12 bytes for 32-bit compression
-		 header + 12 bytes for compressed data header.  */
-	      unsigned char buf[24];
-
-	      assert (sizeof (buf) >= sizeof (Elf64_External_Chdr));
-	      if (get_data (&buf, filedata, section->sh_offset, 1,
-			    sizeof (buf), _("compression header")))
-		{
-		  Elf_Internal_Chdr chdr;
-
-		  (void) get_compression_header (&chdr, buf, sizeof (buf));
-
-		  if (chdr.ch_type == ELFCOMPRESS_ZLIB)
-		    printf ("       ZLIB, ");
-		  else
-		    printf (_("       [<unknown>: 0x%x], "),
-			    chdr.ch_type);
-		  print_vma (chdr.ch_size, LONG_HEX);
-		  printf (", %lu\n", (unsigned long) chdr.ch_addralign);
-		}
-	    }
-	}
     }
 
-  if (!do_section_details)
-    {
-      /* The ordering of the letters shown here matches the ordering of the
-	 corresponding SHF_xxx values, and hence the order in which these
-	 letters will be displayed to the user.  */
-      printf (_("Key to Flags:\n\
-  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),\n\
-  L (link order), O (extra OS processing required), G (group), T (TLS),\n\
-  C (compressed), x (unknown), o (OS specific), E (exclude),\n  "));
-      if (filedata->file_header.e_machine == EM_X86_64
-	  || filedata->file_header.e_machine == EM_L1OM
-	  || filedata->file_header.e_machine == EM_K1OM)
-	printf (_("l (large), "));
-      else if (filedata->file_header.e_machine == EM_ARM)
-	printf (_("y (purecode), "));
-      else if (filedata->file_header.e_machine == EM_PPC)
-	printf (_("v (VLE), "));
-      printf ("p (processor specific)\n");
-    }
+  printf (_("Key to Flags:\n\
+  W (write), A (alloc), X (execute), M (merge), S (strings)\n\
+  I (info), L (link order), G (group), x (unknown)\n\
+  O (extra OS processing required) o (OS specific), p (processor specific)\n"));
 
-  return TRUE;
+  return 1;
 }
 
+static const char *get_section_type_name (unsigned int sh_type)
+{
+  static char buff [32];
+
+  switch (sh_type)
+    {
+    case SHT_NULL:		return "NULL";
+    case SHT_PROGBITS:		return "PROGBITS";
+    case SHT_SYMTAB:		return "SYMTAB";
+    case SHT_STRTAB:		return "STRTAB";
+    case SHT_RELA:		return "RELA";
+    case SHT_HASH:		return "HASH";
+    case SHT_DYNAMIC:		return "DYNAMIC";
+    case SHT_NOTE:		return "NOTE";
+    case SHT_NOBITS:		return "NOBITS";
+    case SHT_REL:		return "REL";
+    case SHT_SHLIB:		return "SHLIB";
+    case SHT_DYNSYM:		return "DYNSYM";
+    case SHT_INIT_ARRAY:	return "INIT_ARRAY";
+    case SHT_FINI_ARRAY:	return "FINI_ARRAY";
+    case SHT_PREINIT_ARRAY:	return "PREINIT_ARRAY";
+    case SHT_GROUP:		return "GROUP";
+    case SHT_SYMTAB_SHNDX:	return "SYMTAB SECTION INDICIES";
+    case SHT_GNU_verdef:	return "VERDEF";
+    case SHT_GNU_verneed:	return "VERNEED";
+    case SHT_GNU_versym:	return "VERSYM";
+    case 0x6ffffff0:	        return "VERSYM";
+    case 0x6ffffffc:	        return "VERDEF";
+    case 0x7ffffffd:		return "AUXILIARY";
+    case 0x7fffffff:		return "FILTER";
+    case SHT_GNU_LIBLIST:	return "GNU_LIBLIST";
+
+    default:
+      if ((sh_type >= SHT_LOPROC) && (sh_type <= SHT_HIPROC))
+	{
+	  const char * result;
+
+	  switch (elf_header.e_machine)
+	    {
+	    case EM_MIPS:
+	    case EM_MIPS_RS3_LE:
+	      result = get_mips_section_type_name (sh_type);
+	      break;
+	    case EM_PARISC:
+	      result = get_parisc_section_type_name (sh_type);
+	      break;
+	    case EM_IA_64:
+	      result = get_ia64_section_type_name (sh_type);
+	      break;
+	    default:
+	      result = NULL;
+	      break;
+	    }
+
+	  if (result != NULL)
+	    return result;
+
+	  sprintf (buff, "LOPROC+%x", sh_type - SHT_LOPROC);
+	}
+      else if ((sh_type >= SHT_LOOS) && (sh_type <= SHT_HIOS))
+	sprintf (buff, "LOOS+%x", sh_type - SHT_LOOS);
+      else if ((sh_type >= SHT_LOUSER) && (sh_type <= SHT_HIUSER))
+	sprintf (buff, "LOUSER+%x", sh_type - SHT_LOUSER);
+      else
+	sprintf (buff, _("<unknown>: %x"), sh_type);
+
+      return buff;
+    }
+}
 
 
 /* Returns TRUE if the program headers were loaded.  */
 
-static bfd_boolean process_program_headers (Filedata * filedata)
+static int process_program_headers (FILE * file)
 {
+  Elf_Internal_Phdr * program_headers;
   Elf_Internal_Phdr * segment;
-  unsigned int i;
-  Elf_Internal_Phdr * previous_load = NULL;
+  unsigned int	      i;
 
-  dynamic_addr = 0;
-  dynamic_size = 0;
-
-  if (filedata->file_header.e_phnum == 0)
+  if (elf_header.e_phnum == 0)
     {
-      /* PR binutils/12467.  */
-      if (filedata->file_header.e_phoff != 0)
-	{
-	  warn (_("possibly corrupt ELF header - it has a non-zero program"
-		  " header offset, but no program headers\n"));
-	  return FALSE;
-	}
-      else if (do_segments)
+      if (do_segments)
 	printf (_("\nThere are no program headers in this file.\n"));
-      return TRUE;
+      return 1;
     }
 
   if (do_segments && !do_header)
     {
-      printf (_("\nElf file type is %s\n"), get_file_type (filedata->file_header.e_type));
-      printf (_("Entry point 0x%s\n"), bfd_vmatoa ("x", filedata->file_header.e_entry));
-      printf (ngettext ("There is %d program header, starting at offset %s\n",
-			"There are %d program headers, starting at offset %s\n",
-			filedata->file_header.e_phnum),
-	      filedata->file_header.e_phnum,
-	      bfd_vmatoa ("u", filedata->file_header.e_phoff));
+      printf (_("\nElf file type is %s\n"), get_file_type (elf_header.e_type));
+      printf (_("Entry point "));
+      print_vma ((bfd_vma) elf_header.e_entry, PREFIX_HEX);
+      printf (_("\nThere are %d program headers, starting at offset "),
+	      elf_header.e_phnum);
+      print_vma ((bfd_vma) elf_header.e_phoff, DEC);
+      printf ("\n");
     }
 
-  if (! get_program_headers (filedata))
-    return TRUE;
+  program_headers = (Elf_Internal_Phdr *) malloc
+    (elf_header.e_phnum * sizeof (Elf_Internal_Phdr));
+
+  if (program_headers == NULL)
+    {
+      error (_("Out of memory\n"));
+      return 0;
+    }
+
+  if (is_32bit_elf)
+    i = get_32bit_program_headers (file, program_headers);
+  else
+    i = get_64bit_program_headers (file, program_headers);
+
+  if (i == 0)
+    {
+      free (program_headers);
+      return 0;
+    }
 
   if (do_segments)
     {
-      if (filedata->file_header.e_phnum > 1)
+      if (elf_header.e_phnum > 1)
 	printf (_("\nProgram Headers:\n"));
       else
 	printf (_("\nProgram Headers:\n"));
@@ -717,13 +539,17 @@ static bfd_boolean process_program_headers (Filedata * filedata)
 	}
     }
 
-  for (i = 0, segment = filedata->program_headers;
-       i < filedata->file_header.e_phnum;
-       i++, segment++)
+  loadaddr = -1;
+  dynamic_addr = 0;
+  dynamic_size = 0;
+
+  for (i = 0, segment = program_headers;
+       i < elf_header.e_phnum;
+       i ++, segment ++)
     {
       if (do_segments)
 	{
-	  printf ("  %-14.14s ", get_segment_type (filedata, segment->p_type));
+	  printf ("  %-14.14s ", get_segment_type (segment->p_type));
 
 	  if (is_32bit_elf)
 	    {
@@ -765,7 +591,7 @@ static bfd_boolean process_program_headers (Filedata * filedata)
 		printf ("0x%6.6lx", (unsigned long) segment->p_memsz);
 	      else
 		{
-		  print_vma (segment->p_memsz, FULL_HEX);
+		  print_vma (segment->p_offset, FULL_HEX);
 		}
 
 	      printf (" %c%c%c ",
@@ -795,197 +621,124 @@ static bfd_boolean process_program_headers (Filedata * filedata)
 		      (segment->p_flags & PF_R ? 'R' : ' '),
 		      (segment->p_flags & PF_W ? 'W' : ' '),
 		      (segment->p_flags & PF_X ? 'E' : ' '));
-	      print_vma (segment->p_align, PREFIX_HEX);
+	      print_vma (segment->p_align, HEX);
 	    }
-
-	  putc ('\n', stdout);
 	}
 
       switch (segment->p_type)
 	{
 	case PT_LOAD:
-#if 0 /* Do not warn about out of order PT_LOAD segments.  Although officially
-	 required by the ELF standard, several programs, including the Linux
-	 kernel, make use of non-ordered segments.  */
-	  if (previous_load
-	      && previous_load->p_vaddr > segment->p_vaddr)
-	    error (_("LOAD segments must be sorted in order of increasing VirtAddr\n"));
-#endif
-	  if (segment->p_memsz < segment->p_filesz)
-	    error (_("the segment's file size is larger than its memory size\n"));
-	  previous_load = segment;
-	  break;
-
-	case PT_PHDR:
-	  /* PR 20815 - Verify that the program header is loaded into memory.  */
-	  if (i > 0 && previous_load != NULL)
-	    error (_("the PHDR segment must occur before any LOAD segment\n"));
-	  if (filedata->file_header.e_machine != EM_PARISC)
-	    {
-	      unsigned int j;
-
-	      for (j = 1; j < filedata->file_header.e_phnum; j++)
-		{
-		  Elf_Internal_Phdr *load = filedata->program_headers + j;
-		  if (load->p_type == PT_LOAD
-		      && load->p_offset <= segment->p_offset
-		      && (load->p_offset + load->p_filesz
-			  >= segment->p_offset + segment->p_filesz)
-		      && load->p_vaddr <= segment->p_vaddr
-		      && (load->p_vaddr + load->p_filesz
-			  >= segment->p_vaddr + segment->p_filesz))
-		    break;
-		}
-	      if (j == filedata->file_header.e_phnum)
-		error (_("the PHDR segment is not covered by a LOAD segment\n"));
-	    }
+	  if (loadaddr == -1)
+	    loadaddr = (segment->p_vaddr & 0xfffff000)
+	      - (segment->p_offset & 0xfffff000);
 	  break;
 
 	case PT_DYNAMIC:
 	  if (dynamic_addr)
 	    error (_("more than one dynamic segment\n"));
 
-	  /* By default, assume that the .dynamic section is the first
-	     section in the DYNAMIC segment.  */
 	  dynamic_addr = segment->p_offset;
 	  dynamic_size = segment->p_filesz;
-
-	  /* Try to locate the .dynamic section. If there is
-	     a section header table, we can easily locate it.  */
-	  if (filedata->section_headers != NULL)
-	    {
-	      Elf_Internal_Shdr * sec;
-
-	      sec = find_section (filedata, ".dynamic");
-	      if (sec == NULL || sec->sh_size == 0)
-		{
-                  /* A corresponding .dynamic section is expected, but on
-                     IA-64/OpenVMS it is OK for it to be missing.  */
-                  if (!is_ia64_vms (filedata))
-                    error (_("no .dynamic section in the dynamic segment\n"));
-		  break;
-		}
-
-	      if (sec->sh_type == SHT_NOBITS)
-		{
-		  dynamic_size = 0;
-		  break;
-		}
-
-	      dynamic_addr = sec->sh_offset;
-	      dynamic_size = sec->sh_size;
-
-	      if (dynamic_addr < segment->p_offset
-		  || dynamic_addr > segment->p_offset + segment->p_filesz)
-		warn (_("the .dynamic section is not contained"
-			" within the dynamic segment\n"));
-	      else if (dynamic_addr > segment->p_offset)
-		warn (_("the .dynamic section is not the first section"
-			" in the dynamic segment.\n"));
-	    }
-
-	  /* PR binutils/17512: Avoid corrupt dynamic section info in the
-	     segment.  Check this after matching against the section headers
-	     so we don't warn on debuginfo file (which have NOBITS .dynamic
-	     sections).  */
-	  if (dynamic_addr > filedata->file_size
-	      || dynamic_size > filedata->file_size - dynamic_addr)
-	    {
-	      error (_("the dynamic segment offset + size exceeds the size of the file\n"));
-	      dynamic_addr = dynamic_size = 0;
-	    }
 	  break;
 
 	case PT_INTERP:
-	  if (fseek (filedata->handle, archive_file_offset + (long) segment->p_offset,
-		     SEEK_SET))
+	  if (fseek (file, (long) segment->p_offset, SEEK_SET))
 	    error (_("Unable to find program interpreter name\n"));
 	  else
 	    {
-	      char fmt [32];
-	      int ret = snprintf (fmt, sizeof (fmt), "%%%ds", PATH_MAX - 1);
-
-	      if (ret >= (int) sizeof (fmt) || ret < 0)
-		error (_("Internal error: failed to create format string to display program interpreter\n"));
-
 	      program_interpreter[0] = 0;
-	      if (fscanf (filedata->handle, fmt, program_interpreter) <= 0)
-		error (_("Unable to read program interpreter name\n"));
+	      fscanf (file, "%63s", program_interpreter);
 
 	      if (do_segments)
-		printf (_("      [Requesting program interpreter: %s]\n"),
+		printf (_("\n      [Requesting program interpreter: %s]"),
 		    program_interpreter);
 	    }
 	  break;
 	}
+
+      if (do_segments)
+	putc ('\n', stdout);
     }
 
-  if (do_segments
-      && filedata->section_headers != NULL
-      && filedata->string_table != NULL)
+  if (loadaddr == -1)
+    {
+      /* Very strange.  */
+      loadaddr = 0;
+    }
+
+  if (do_segments && section_headers != NULL)
     {
       printf (_("\n Section to Segment mapping:\n"));
       printf (_("  Segment Sections...\n"));
 
-      for (i = 0; i < filedata->file_header.e_phnum; i++)
+      assert (string_table != NULL);
+
+      for (i = 0; i < elf_header.e_phnum; i++)
 	{
 	  unsigned int j;
 	  Elf_Internal_Shdr * section;
 
-	  segment = filedata->program_headers + i;
-	  section = filedata->section_headers + 1;
+	  segment = program_headers + i;
+	  section = section_headers;
 
 	  printf ("   %2.2d     ", i);
 
-	  for (j = 1; j < filedata->file_header.e_shnum; j++, section++)
+	  for (j = 1; j < elf_header.e_shnum; j++, section ++)
 	    {
-	      if (!ELF_TBSS_SPECIAL (section, segment)
-		  && ELF_SECTION_IN_SEGMENT_STRICT (section, segment))
-		printf ("%s ", printable_section_name (filedata, section));
+	      if (section->sh_size > 0
+		  /* Compare allocated sections by VMA, unallocated
+		     sections by file offset.  */
+		  && (section->sh_flags & SHF_ALLOC
+		      ? (section->sh_addr >= segment->p_vaddr
+			 && section->sh_addr + section->sh_size
+			 <= segment->p_vaddr + segment->p_memsz)
+		      : ((bfd_vma) section->sh_offset >= segment->p_offset
+			 && (section->sh_offset + section->sh_size
+			     <= segment->p_offset + segment->p_filesz))))
+		printf ("%s ", SECTION_NAME (section));
 	    }
 
 	  putc ('\n',stdout);
 	}
     }
 
-  return TRUE;
+  free (program_headers);
+
+  return 1;
 }
 
 
 
-/* Parse and display the contents of the dynamic section.  */
-
-static bfd_boolean process_dynamic_section (Filedata * filedata)
+/* Parse and display the contents of the dynamic segment.  */
+static int process_dynamic_segment ( FILE * file)
 {
   Elf_Internal_Dyn * entry;
+  bfd_size_type      i;
 
   if (dynamic_size == 0)
     {
       if (do_dynamic)
-	printf (_("\nThere is no dynamic section in this file.\n"));
+	printf (_("\nThere is no dynamic segment in this file.\n"));
 
-      return TRUE;
+      return 1;
     }
 
   if (is_32bit_elf)
     {
-      if (! get_32bit_dynamic_section (filedata))
-	return FALSE;
+      if (! get_32bit_dynamic_segment (file))
+	return 0;
     }
-  else
-    {
-      if (! get_64bit_dynamic_section (filedata))
-	return FALSE;
-    }
+  else if (! get_64bit_dynamic_segment (file))
+    return 0;
 
   /* Find the appropriate symbol table.  */
   if (dynamic_symbols == NULL)
     {
-      for (entry = dynamic_section;
-	   entry < dynamic_section + dynamic_nent;
-	   ++entry)
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
 	{
-	  Elf_Internal_Shdr section;
+	  Elf32_Internal_Shdr section;
 
 	  if (entry->d_tag != DT_SYMTAB)
 	    continue;
@@ -996,48 +749,37 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	     we default to reading in the entire file (!) and
 	     processing that.  This is overkill, I know, but it
 	     should work.  */
-	  section.sh_offset = offset_from_vma (filedata, entry->d_un.d_val, 0);
-	  if ((bfd_size_type) section.sh_offset > filedata->file_size)
-	    {
-	      /* See PR 21379 for a reproducer.  */
-	      error (_("Invalid DT_SYMTAB entry: %lx"), (long) section.sh_offset);
-	      return FALSE;
-	    }
+	  section.sh_offset = entry->d_un.d_val - loadaddr;
 
-	  if (archive_file_offset != 0)
-	    section.sh_size = archive_file_size - section.sh_offset;
-	  else
-	    section.sh_size = filedata->file_size - section.sh_offset;
+	  if (fseek (file, 0, SEEK_END))
+	    error (_("Unable to seek to end of file!"));
 
+	  section.sh_size = ftell (file) - section.sh_offset;
 	  if (is_32bit_elf)
 	    section.sh_entsize = sizeof (Elf32_External_Sym);
 	  else
 	    section.sh_entsize = sizeof (Elf64_External_Sym);
-	  section.sh_name = filedata->string_table_length;
 
-	  if (dynamic_symbols != NULL)
-	    {
-	      error (_("Multiple dynamic symbol table sections found\n"));
-	      free (dynamic_symbols);
-	    }
-	  dynamic_symbols = GET_ELF_SYMBOLS (filedata, &section, & num_dynamic_syms);
+	  num_dynamic_syms = section.sh_size / section.sh_entsize;
 	  if (num_dynamic_syms < 1)
 	    {
 	      error (_("Unable to determine the number of symbols to load\n"));
 	      continue;
 	    }
+
+	  dynamic_symbols = GET_ELF_SYMBOLS (file, &section);
 	}
     }
 
   /* Similarly find a string table.  */
   if (dynamic_strings == NULL)
     {
-      for (entry = dynamic_section;
-	   entry < dynamic_section + dynamic_nent;
-	   ++entry)
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
 	{
 	  unsigned long offset;
-	  long str_tab_len;
+	  long          str_tab_len;
 
 	  if (entry->d_tag != DT_STRTAB)
 	    continue;
@@ -1049,12 +791,10 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	     processing that.  This is overkill, I know, but it
 	     should work.  */
 
-	  offset = offset_from_vma (filedata, entry->d_un.d_val, 0);
-
-	  if (archive_file_offset != 0)
-	    str_tab_len = archive_file_size - offset;
-	  else
-	    str_tab_len = filedata->file_size - offset;
+	  offset = entry->d_un.d_val - loadaddr;
+	  if (fseek (file, 0, SEEK_END))
+	    error (_("Unable to seek to end of file\n"));
+	  str_tab_len = ftell (file) - offset;
 
 	  if (str_tab_len < 1)
 	    {
@@ -1063,78 +803,58 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	      continue;
 	    }
 
-	  if (dynamic_strings != NULL)
-	    {
-	      error (_("Multiple dynamic string tables found\n"));
-	      free (dynamic_strings);
-	    }
-
-	  dynamic_strings = (char *) get_data (NULL, filedata, offset, 1,
-                                               str_tab_len,
-                                               _("dynamic string table"));
-	  dynamic_strings_length = dynamic_strings == NULL ? 0 : str_tab_len;
+	  dynamic_strings = (char *) get_data (NULL, file, offset, str_tab_len,
+					       _("dynamic string table"));
+	  break;
 	}
     }
 
   /* And find the syminfo section if available.  */
   if (dynamic_syminfo == NULL)
     {
-      unsigned long syminsz = 0;
+      unsigned int syminsz = 0;
 
-      for (entry = dynamic_section;
-	   entry < dynamic_section + dynamic_nent;
-	   ++entry)
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
 	{
 	  if (entry->d_tag == DT_SYMINENT)
 	    {
 	      /* Note: these braces are necessary to avoid a syntax
 		 error from the SunOS4 C compiler.  */
-	      /* PR binutils/17531: A corrupt file can trigger this test.
-		 So do not use an assert, instead generate an error message.  */
-	      if (sizeof (Elf_External_Syminfo) != entry->d_un.d_val)
-		error (_("Bad value (%d) for SYMINENT entry\n"),
-		       (int) entry->d_un.d_val);
+	      assert (sizeof (Elf_External_Syminfo) == entry->d_un.d_val);
 	    }
 	  else if (entry->d_tag == DT_SYMINSZ)
 	    syminsz = entry->d_un.d_val;
 	  else if (entry->d_tag == DT_SYMINFO)
-	    dynamic_syminfo_offset = offset_from_vma (filedata, entry->d_un.d_val,
-						      syminsz);
+	    dynamic_syminfo_offset = entry->d_un.d_val - loadaddr;
 	}
 
       if (dynamic_syminfo_offset != 0 && syminsz != 0)
 	{
 	  Elf_External_Syminfo * extsyminfo;
-	  Elf_External_Syminfo * extsym;
 	  Elf_Internal_Syminfo * syminfo;
 
 	  /* There is a syminfo section.  Read the data.  */
-	  extsyminfo = (Elf_External_Syminfo *)
-              get_data (NULL, filedata, dynamic_syminfo_offset, 1, syminsz,
-                        _("symbol information"));
+	  extsyminfo = ((Elf_External_Syminfo *)
+			get_data (NULL, file, dynamic_syminfo_offset,
+				  syminsz, _("symbol information")));
 	  if (!extsyminfo)
-	    return FALSE;
+	    return 0;
 
-	  if (dynamic_syminfo != NULL)
-	    {
-	      error (_("Multiple dynamic symbol information sections found\n"));
-	      free (dynamic_syminfo);
-	    }
 	  dynamic_syminfo = (Elf_Internal_Syminfo *) malloc (syminsz);
 	  if (dynamic_syminfo == NULL)
 	    {
-	      error (_("Out of memory allocating %lu byte for dynamic symbol info\n"),
-		     (unsigned long) syminsz);
-	      return FALSE;
+	      error (_("Out of memory\n"));
+	      return 0;
 	    }
 
 	  dynamic_syminfo_nent = syminsz / sizeof (Elf_External_Syminfo);
-	  for (syminfo = dynamic_syminfo, extsym = extsyminfo;
-	       syminfo < dynamic_syminfo + dynamic_syminfo_nent;
-	       ++syminfo, ++extsym)
+	  for (i = 0, syminfo = dynamic_syminfo; i < dynamic_syminfo_nent;
+	       ++i, ++syminfo)
 	    {
-	      syminfo->si_boundto = BYTE_GET (extsym->si_boundto);
-	      syminfo->si_flags = BYTE_GET (extsym->si_flags);
+	      syminfo->si_boundto = BYTE_GET (extsyminfo[i].si_boundto);
+	      syminfo->si_flags = BYTE_GET (extsyminfo[i].si_flags);
 	    }
 
 	  free (extsyminfo);
@@ -1142,18 +862,14 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
     }
 
   if (do_dynamic && dynamic_addr)
-    printf (ngettext ("\nDynamic section at offset 0x%lx "
-		      "contains %lu entry:\n",
-		      "\nDynamic section at offset 0x%lx "
-		      "contains %lu entries:\n",
-		      dynamic_nent),
-	    dynamic_addr, (unsigned long) dynamic_nent);
+    printf (_("\nDynamic segment at offset 0x%x contains %ld entries:\n"),
+	    dynamic_addr, (long) dynamic_size);
   if (do_dynamic)
     printf (_("  Tag        Type                         Name/Value\n"));
 
-  for (entry = dynamic_section;
-       entry < dynamic_section + dynamic_nent;
-       entry++)
+  for (i = 0, entry = dynamic_segment;
+       i < dynamic_size;
+       i++, entry ++)
     {
       if (do_dynamic)
 	{
@@ -1161,16 +877,18 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 
 	  putchar (' ');
 	  print_vma (entry->d_tag, FULL_HEX);
-	  dtype = get_dynamic_type (filedata, entry->d_tag);
+	  dtype = get_dynamic_type (entry->d_tag);
 	  printf (" (%s)%*s", dtype,
-		  ((is_32bit_elf ? 27 : 19) - (int) strlen (dtype)), " ");
+		  ((is_32bit_elf ? 27 : 19)
+		   - (int) strlen (dtype)),
+		  " ");
 	}
 
       switch (entry->d_tag)
 	{
 	case DT_FLAGS:
 	  if (do_dynamic)
-	    print_dynamic_flags (entry->d_un.d_val);
+	    puts (get_dynamic_flags (entry->d_un.d_val));
 	  break;
 
 	case DT_AUXILIARY:
@@ -1181,7 +899,7 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	  if (do_dynamic)
 	    {
 	      switch (entry->d_tag)
-		{
+	        {
 		case DT_AUXILIARY:
 		  printf (_("Auxiliary library"));
 		  break;
@@ -1190,7 +908,7 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 		  printf (_("Filter library"));
 		  break;
 
-		case DT_CONFIG:
+	        case DT_CONFIG:
 		  printf (_("Configuration file"));
 		  break;
 
@@ -1203,8 +921,8 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 		  break;
 		}
 
-	      if (VALID_DYNAMIC_NAME (entry->d_un.d_val))
-		printf (": [%s]\n", GET_DYNAMIC_NAME (entry->d_un.d_val));
+	      if (dynamic_strings)
+		printf (": [%s]\n", dynamic_strings + entry->d_un.d_val);
 	      else
 		{
 		  printf (": ");
@@ -1218,13 +936,11 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	  if (do_dynamic)
 	    {
 	      printf (_("Flags:"));
-
 	      if (entry->d_un.d_val == 0)
 		printf (_(" None\n"));
 	      else
 		{
 		  unsigned long int val = entry->d_un.d_val;
-
 		  if (val & DTF_1_PARINIT)
 		    {
 		      printf (" PARINIT");
@@ -1246,13 +962,11 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	  if (do_dynamic)
 	    {
 	      printf (_("Flags:"));
-
 	      if (entry->d_un.d_val == 0)
 		printf (_(" None\n"));
 	      else
 		{
 		  unsigned long int val = entry->d_un.d_val;
-
 		  if (val & DF_P1_LAZYLOAD)
 		    {
 		      printf (" LAZYLOAD");
@@ -1279,7 +993,6 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	      else
 		{
 		  unsigned long int val = entry->d_un.d_val;
-
 		  if (val & DF_1_NOW)
 		    {
 		      printf (" NOW");
@@ -1345,95 +1058,10 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 		      printf (" NODUMP");
 		      val ^= DF_1_NODUMP;
 		    }
-		  if (val & DF_1_CONFALT)
+		  if (val & DF_1_CONLFAT)
 		    {
-		      printf (" CONFALT");
-		      val ^= DF_1_CONFALT;
-		    }
-		  if (val & DF_1_ENDFILTEE)
-		    {
-		      printf (" ENDFILTEE");
-		      val ^= DF_1_ENDFILTEE;
-		    }
-		  if (val & DF_1_DISPRELDNE)
-		    {
-		      printf (" DISPRELDNE");
-		      val ^= DF_1_DISPRELDNE;
-		    }
-		  if (val & DF_1_DISPRELPND)
-		    {
-		      printf (" DISPRELPND");
-		      val ^= DF_1_DISPRELPND;
-		    }
-		  if (val & DF_1_NODIRECT)
-		    {
-		      printf (" NODIRECT");
-		      val ^= DF_1_NODIRECT;
-		    }
-		  if (val & DF_1_IGNMULDEF)
-		    {
-		      printf (" IGNMULDEF");
-		      val ^= DF_1_IGNMULDEF;
-		    }
-		  if (val & DF_1_NOKSYMS)
-		    {
-		      printf (" NOKSYMS");
-		      val ^= DF_1_NOKSYMS;
-		    }
-		  if (val & DF_1_NOHDR)
-		    {
-		      printf (" NOHDR");
-		      val ^= DF_1_NOHDR;
-		    }
-		  if (val & DF_1_EDITED)
-		    {
-		      printf (" EDITED");
-		      val ^= DF_1_EDITED;
-		    }
-		  if (val & DF_1_NORELOC)
-		    {
-		      printf (" NORELOC");
-		      val ^= DF_1_NORELOC;
-		    }
-		  if (val & DF_1_SYMINTPOSE)
-		    {
-		      printf (" SYMINTPOSE");
-		      val ^= DF_1_SYMINTPOSE;
-		    }
-		  if (val & DF_1_GLOBAUDIT)
-		    {
-		      printf (" GLOBAUDIT");
-		      val ^= DF_1_GLOBAUDIT;
-		    }
-		  if (val & DF_1_SINGLETON)
-		    {
-		      printf (" SINGLETON");
-		      val ^= DF_1_SINGLETON;
-		    }
-		  if (val & DF_1_STUB)
-		    {
-		      printf (" STUB");
-		      val ^= DF_1_STUB;
-		    }
-		  if (val & DF_1_PIE)
-		    {
-		      printf (" PIE");
-		      val ^= DF_1_PIE;
-		    }
-		  if (val & DF_1_KMOD)
-		    {
-		      printf (" KMOD");
-		      val ^= DF_1_KMOD;
-		    }
-		  if (val & DF_1_WEAKFILTER)
-		    {
-		      printf (" WEAKFILTER");
-		      val ^= DF_1_WEAKFILTER;
-		    }
-		  if (val & DF_1_NOCOMMON)
-		    {
-		      printf (" NOCOMMON");
-		      val ^= DF_1_NOCOMMON;
+		      printf (" CONLFAT");
+		      val ^= DF_1_CONLFAT;
 		    }
 		  if (val != 0)
 		    printf (" %lx", val);
@@ -1443,9 +1071,8 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	  break;
 
 	case DT_PLTREL:
-	  dynamic_info[entry->d_tag] = entry->d_un.d_val;
 	  if (do_dynamic)
-	    puts (get_dynamic_type (filedata, entry->d_un.d_val));
+	    puts (get_dynamic_type (entry->d_un.d_val));
 	  break;
 
 	case DT_NULL	:
@@ -1471,10 +1098,10 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	    {
 	      char * name;
 
-	      if (VALID_DYNAMIC_NAME (entry->d_un.d_val))
-		name = GET_DYNAMIC_NAME (entry->d_un.d_val);
-	      else
+	      if (dynamic_strings == NULL)
 		name = NULL;
+	      else
+		name = dynamic_strings + entry->d_un.d_val;
 
 	      if (name)
 		{
@@ -1483,7 +1110,7 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 		    case DT_NEEDED:
 		      printf (_("Shared library: [%s]"), name);
 
-		      if (streq (name, program_interpreter))
+		      if (strcmp (name, program_interpreter) == 0)
 			printf (_(" program interpreter"));
 		      break;
 
@@ -1518,8 +1145,6 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	case DT_RELAENT	:
 	case DT_SYMENT	:
 	case DT_RELENT	:
-	  dynamic_info[entry->d_tag] = entry->d_un.d_val;
-	  /* Fall through.  */
 	case DT_PLTPADSZ:
 	case DT_MOVEENT	:
 	case DT_MOVESZ	:
@@ -1530,7 +1155,7 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	  if (do_dynamic)
 	    {
 	      print_vma (entry->d_un.d_val, UNSIGNED);
-	      printf (_(" (bytes)\n"));
+	      printf (" (bytes)\n");
 	    }
 	  break;
 
@@ -1553,12 +1178,13 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	case DT_FINI_ARRAY:
 	  if (do_dynamic)
 	    {
-	      if (entry->d_tag == DT_USED
-		  && VALID_DYNAMIC_NAME (entry->d_un.d_val))
+	      if (dynamic_strings != NULL && entry->d_tag == DT_USED)
 		{
-		  char * name = GET_DYNAMIC_NAME (entry->d_un.d_val);
+		  char * name;
 
-		  if (*name)
+		  name = dynamic_strings + entry->d_un.d_val;
+
+		  if (* name)
 		    {
 		      printf (_("Not needed object: [%s]\n"), name);
 		      break;
@@ -1572,59 +1198,37 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 
 	case DT_BIND_NOW:
 	  /* The value of this entry is ignored.  */
-	  if (do_dynamic)
-	    putchar ('\n');
 	  break;
 
 	case DT_GNU_PRELINKED:
 	  if (do_dynamic)
 	    {
 	      struct tm * tmp;
-	      time_t atime = entry->d_un.d_val;
+	      time_t time = entry->d_un.d_val;
 
-	      tmp = gmtime (&atime);
-	      /* PR 17533 file: 041-1244816-0.004.  */
-	      if (tmp == NULL)
-		printf (_("<corrupt time val: %lx"),
-			(unsigned long) atime);
-	      else
-		printf ("%04u-%02u-%02uT%02u:%02u:%02u\n",
-			tmp->tm_year + 1900, tmp->tm_mon + 1, tmp->tm_mday,
-			tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+	      tmp = gmtime (&time);
+	      printf ("%04u-%02u-%02uT%02u:%02u:%02u\n",
+		      tmp->tm_year + 1900, tmp->tm_mon + 1, tmp->tm_mday,
+		      tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
 
-	    }
-	  break;
-
-	case DT_GNU_HASH:
-	  dynamic_info_DT_GNU_HASH = entry->d_un.d_val;
-	  if (do_dynamic)
-	    {
-	      print_vma (entry->d_un.d_val, PREFIX_HEX);
-	      putchar ('\n');
 	    }
 	  break;
 
 	default:
 	  if ((entry->d_tag >= DT_VERSYM) && (entry->d_tag <= DT_VERNEEDNUM))
-	    version_info[DT_VERSIONTAGIDX (entry->d_tag)] =
+	    version_info [DT_VERSIONTAGIDX (entry->d_tag)] =
 	      entry->d_un.d_val;
 
 	  if (do_dynamic)
 	    {
-	      switch (filedata->file_header.e_machine)
+	      switch (elf_header.e_machine)
 		{
-		case EM_AARCH64:
-		  dynamic_section_aarch64_val (entry);
-		  break;
 		case EM_MIPS:
 		case EM_MIPS_RS3_LE:
-		  dynamic_section_mips_val (entry);
+		  dynamic_segment_mips_val (entry);
 		  break;
 		case EM_PARISC:
-		  dynamic_section_parisc_val (entry);
-		  break;
-		case EM_IA_64:
-		  dynamic_section_ia64_val (entry);
+		  dynamic_segment_parisc_val (entry);
 		  break;
 		default:
 		  print_vma (entry->d_un.d_val, PREFIX_HEX);
@@ -1635,83 +1239,612 @@ static bfd_boolean process_dynamic_section (Filedata * filedata)
 	}
     }
 
-  return TRUE;
+  return 1;
 }
 
-/* Process the reloc section.  */
 
-static bfd_boolean process_relocs (Filedata * filedata)
+/* Parse and display the contents of the dynamic segment.  */
+static int process_dynamic_segment (FILE * file)
 {
-  unsigned long rel_size;
-  unsigned long rel_offset;
+  Elf_Internal_Dyn * entry;
+  bfd_size_type      i;
+
+  if (dynamic_size == 0)
+    {
+      if (do_dynamic)
+	printf (_("\nThere is no dynamic segment in this file.\n"));
+
+      return 1;
+    }
+
+  if (is_32bit_elf)
+    {
+      if (! get_32bit_dynamic_segment (file))
+	return 0;
+    }
+  else if (! get_64bit_dynamic_segment (file))
+    return 0;
+
+  /* Find the appropriate symbol table.  */
+  if (dynamic_symbols == NULL)
+    {
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
+	{
+	  Elf32_Internal_Shdr section;
+
+	  if (entry->d_tag != DT_SYMTAB)
+	    continue;
+
+	  dynamic_info[DT_SYMTAB] = entry->d_un.d_val;
+
+	  /* Since we do not know how big the symbol table is,
+	     we default to reading in the entire file (!) and
+	     processing that.  This is overkill, I know, but it
+	     should work.  */
+	  section.sh_offset = entry->d_un.d_val - loadaddr;
+
+	  if (fseek (file, 0, SEEK_END))
+	    error (_("Unable to seek to end of file!"));
+
+	  section.sh_size = ftell (file) - section.sh_offset;
+	  if (is_32bit_elf)
+	    section.sh_entsize = sizeof (Elf32_External_Sym);
+	  else
+	    section.sh_entsize = sizeof (Elf64_External_Sym);
+
+	  num_dynamic_syms = section.sh_size / section.sh_entsize;
+	  if (num_dynamic_syms < 1)
+	    {
+	      error (_("Unable to determine the number of symbols to load\n"));
+	      continue;
+	    }
+
+	  dynamic_symbols = GET_ELF_SYMBOLS (file, &section);
+	}
+    }
+
+  /* Similarly find a string table.  */
+  if (dynamic_strings == NULL)
+    {
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
+	{
+	  unsigned long offset;
+	  long          str_tab_len;
+
+	  if (entry->d_tag != DT_STRTAB)
+	    continue;
+
+	  dynamic_info[DT_STRTAB] = entry->d_un.d_val;
+
+	  /* Since we do not know how big the string table is,
+	     we default to reading in the entire file (!) and
+	     processing that.  This is overkill, I know, but it
+	     should work.  */
+
+	  offset = entry->d_un.d_val - loadaddr;
+	  if (fseek (file, 0, SEEK_END))
+	    error (_("Unable to seek to end of file\n"));
+	  str_tab_len = ftell (file) - offset;
+
+	  if (str_tab_len < 1)
+	    {
+	      error
+		(_("Unable to determine the length of the dynamic string table\n"));
+	      continue;
+	    }
+
+	  dynamic_strings = (char *) get_data (NULL, file, offset, str_tab_len,
+					       _("dynamic string table"));
+	  break;
+	}
+    }
+
+  /* And find the syminfo section if available.  */
+  if (dynamic_syminfo == NULL)
+    {
+      unsigned int syminsz = 0;
+
+      for (i = 0, entry = dynamic_segment;
+	   i < dynamic_size;
+	   ++i, ++ entry)
+	{
+	  if (entry->d_tag == DT_SYMINENT)
+	    {
+	      /* Note: these braces are necessary to avoid a syntax
+		 error from the SunOS4 C compiler.  */
+	      assert (sizeof (Elf_External_Syminfo) == entry->d_un.d_val);
+	    }
+	  else if (entry->d_tag == DT_SYMINSZ)
+	    syminsz = entry->d_un.d_val;
+	  else if (entry->d_tag == DT_SYMINFO)
+	    dynamic_syminfo_offset = entry->d_un.d_val - loadaddr;
+	}
+
+      if (dynamic_syminfo_offset != 0 && syminsz != 0)
+	{
+	  Elf_External_Syminfo * extsyminfo;
+	  Elf_Internal_Syminfo * syminfo;
+
+	  /* There is a syminfo section.  Read the data.  */
+	  extsyminfo = ((Elf_External_Syminfo *)
+			get_data (NULL, file, dynamic_syminfo_offset,
+				  syminsz, _("symbol information")));
+	  if (!extsyminfo)
+	    return 0;
+
+	  dynamic_syminfo = (Elf_Internal_Syminfo *) malloc (syminsz);
+	  if (dynamic_syminfo == NULL)
+	    {
+	      error (_("Out of memory\n"));
+	      return 0;
+	    }
+
+	  dynamic_syminfo_nent = syminsz / sizeof (Elf_External_Syminfo);
+	  for (i = 0, syminfo = dynamic_syminfo; i < dynamic_syminfo_nent;
+	       ++i, ++syminfo)
+	    {
+	      syminfo->si_boundto = BYTE_GET (extsyminfo[i].si_boundto);
+	      syminfo->si_flags = BYTE_GET (extsyminfo[i].si_flags);
+	    }
+
+	  free (extsyminfo);
+	}
+    }
+
+  if (do_dynamic && dynamic_addr)
+    printf (_("\nDynamic segment at offset 0x%x contains %ld entries:\n"),
+	    dynamic_addr, (long) dynamic_size);
+  if (do_dynamic)
+    printf (_("  Tag        Type                         Name/Value\n"));
+
+  for (i = 0, entry = dynamic_segment;
+       i < dynamic_size;
+       i++, entry ++)
+    {
+      if (do_dynamic)
+	{
+	  const char * dtype;
+
+	  putchar (' ');
+	  print_vma (entry->d_tag, FULL_HEX);
+	  dtype = get_dynamic_type (entry->d_tag);
+	  printf (" (%s)%*s", dtype,
+		  ((is_32bit_elf ? 27 : 19)
+		   - (int) strlen (dtype)),
+		  " ");
+	}
+
+      switch (entry->d_tag)
+	{
+	case DT_FLAGS:
+	  if (do_dynamic)
+	    puts (get_dynamic_flags (entry->d_un.d_val));
+	  break;
+
+	case DT_AUXILIARY:
+	case DT_FILTER:
+	case DT_CONFIG:
+	case DT_DEPAUDIT:
+	case DT_AUDIT:
+	  if (do_dynamic)
+	    {
+	      switch (entry->d_tag)
+	        {
+		case DT_AUXILIARY:
+		  printf (_("Auxiliary library"));
+		  break;
+
+		case DT_FILTER:
+		  printf (_("Filter library"));
+		  break;
+
+	        case DT_CONFIG:
+		  printf (_("Configuration file"));
+		  break;
+
+		case DT_DEPAUDIT:
+		  printf (_("Dependency audit library"));
+		  break;
+
+		case DT_AUDIT:
+		  printf (_("Audit library"));
+		  break;
+		}
+
+	      if (dynamic_strings)
+		printf (": [%s]\n", dynamic_strings + entry->d_un.d_val);
+	      else
+		{
+		  printf (": ");
+		  print_vma (entry->d_un.d_val, PREFIX_HEX);
+		  putchar ('\n');
+		}
+	    }
+	  break;
+
+	case DT_FEATURE:
+	  if (do_dynamic)
+	    {
+	      printf (_("Flags:"));
+	      if (entry->d_un.d_val == 0)
+		printf (_(" None\n"));
+	      else
+		{
+		  unsigned long int val = entry->d_un.d_val;
+		  if (val & DTF_1_PARINIT)
+		    {
+		      printf (" PARINIT");
+		      val ^= DTF_1_PARINIT;
+		    }
+		  if (val & DTF_1_CONFEXP)
+		    {
+		      printf (" CONFEXP");
+		      val ^= DTF_1_CONFEXP;
+		    }
+		  if (val != 0)
+		    printf (" %lx", val);
+		  puts ("");
+		}
+	    }
+	  break;
+
+	case DT_POSFLAG_1:
+	  if (do_dynamic)
+	    {
+	      printf (_("Flags:"));
+	      if (entry->d_un.d_val == 0)
+		printf (_(" None\n"));
+	      else
+		{
+		  unsigned long int val = entry->d_un.d_val;
+		  if (val & DF_P1_LAZYLOAD)
+		    {
+		      printf (" LAZYLOAD");
+		      val ^= DF_P1_LAZYLOAD;
+		    }
+		  if (val & DF_P1_GROUPPERM)
+		    {
+		      printf (" GROUPPERM");
+		      val ^= DF_P1_GROUPPERM;
+		    }
+		  if (val != 0)
+		    printf (" %lx", val);
+		  puts ("");
+		}
+	    }
+	  break;
+
+	case DT_FLAGS_1:
+	  if (do_dynamic)
+	    {
+	      printf (_("Flags:"));
+	      if (entry->d_un.d_val == 0)
+		printf (_(" None\n"));
+	      else
+		{
+		  unsigned long int val = entry->d_un.d_val;
+		  if (val & DF_1_NOW)
+		    {
+		      printf (" NOW");
+		      val ^= DF_1_NOW;
+		    }
+		  if (val & DF_1_GLOBAL)
+		    {
+		      printf (" GLOBAL");
+		      val ^= DF_1_GLOBAL;
+		    }
+		  if (val & DF_1_GROUP)
+		    {
+		      printf (" GROUP");
+		      val ^= DF_1_GROUP;
+		    }
+		  if (val & DF_1_NODELETE)
+		    {
+		      printf (" NODELETE");
+		      val ^= DF_1_NODELETE;
+		    }
+		  if (val & DF_1_LOADFLTR)
+		    {
+		      printf (" LOADFLTR");
+		      val ^= DF_1_LOADFLTR;
+		    }
+		  if (val & DF_1_INITFIRST)
+		    {
+		      printf (" INITFIRST");
+		      val ^= DF_1_INITFIRST;
+		    }
+		  if (val & DF_1_NOOPEN)
+		    {
+		      printf (" NOOPEN");
+		      val ^= DF_1_NOOPEN;
+		    }
+		  if (val & DF_1_ORIGIN)
+		    {
+		      printf (" ORIGIN");
+		      val ^= DF_1_ORIGIN;
+		    }
+		  if (val & DF_1_DIRECT)
+		    {
+		      printf (" DIRECT");
+		      val ^= DF_1_DIRECT;
+		    }
+		  if (val & DF_1_TRANS)
+		    {
+		      printf (" TRANS");
+		      val ^= DF_1_TRANS;
+		    }
+		  if (val & DF_1_INTERPOSE)
+		    {
+		      printf (" INTERPOSE");
+		      val ^= DF_1_INTERPOSE;
+		    }
+		  if (val & DF_1_NODEFLIB)
+		    {
+		      printf (" NODEFLIB");
+		      val ^= DF_1_NODEFLIB;
+		    }
+		  if (val & DF_1_NODUMP)
+		    {
+		      printf (" NODUMP");
+		      val ^= DF_1_NODUMP;
+		    }
+		  if (val & DF_1_CONLFAT)
+		    {
+		      printf (" CONLFAT");
+		      val ^= DF_1_CONLFAT;
+		    }
+		  if (val != 0)
+		    printf (" %lx", val);
+		  puts ("");
+		}
+	    }
+	  break;
+
+	case DT_PLTREL:
+	  if (do_dynamic)
+	    puts (get_dynamic_type (entry->d_un.d_val));
+	  break;
+
+	case DT_NULL	:
+	case DT_NEEDED	:
+	case DT_PLTGOT	:
+	case DT_HASH	:
+	case DT_STRTAB	:
+	case DT_SYMTAB	:
+	case DT_RELA	:
+	case DT_INIT	:
+	case DT_FINI	:
+	case DT_SONAME	:
+	case DT_RPATH	:
+	case DT_SYMBOLIC:
+	case DT_REL	:
+	case DT_DEBUG	:
+	case DT_TEXTREL	:
+	case DT_JMPREL	:
+	case DT_RUNPATH	:
+	  dynamic_info[entry->d_tag] = entry->d_un.d_val;
+
+	  if (do_dynamic)
+	    {
+	      char * name;
+
+	      if (dynamic_strings == NULL)
+		name = NULL;
+	      else
+		name = dynamic_strings + entry->d_un.d_val;
+
+	      if (name)
+		{
+		  switch (entry->d_tag)
+		    {
+		    case DT_NEEDED:
+		      printf (_("Shared library: [%s]"), name);
+
+		      if (strcmp (name, program_interpreter) == 0)
+			printf (_(" program interpreter"));
+		      break;
+
+		    case DT_SONAME:
+		      printf (_("Library soname: [%s]"), name);
+		      break;
+
+		    case DT_RPATH:
+		      printf (_("Library rpath: [%s]"), name);
+		      break;
+
+		    case DT_RUNPATH:
+		      printf (_("Library runpath: [%s]"), name);
+		      break;
+
+		    default:
+		      print_vma (entry->d_un.d_val, PREFIX_HEX);
+		      break;
+		    }
+		}
+	      else
+		print_vma (entry->d_un.d_val, PREFIX_HEX);
+
+	      putchar ('\n');
+	    }
+	  break;
+
+	case DT_PLTRELSZ:
+	case DT_RELASZ	:
+	case DT_STRSZ	:
+	case DT_RELSZ	:
+	case DT_RELAENT	:
+	case DT_SYMENT	:
+	case DT_RELENT	:
+	case DT_PLTPADSZ:
+	case DT_MOVEENT	:
+	case DT_MOVESZ	:
+	case DT_INIT_ARRAYSZ:
+	case DT_FINI_ARRAYSZ:
+	case DT_GNU_CONFLICTSZ:
+	case DT_GNU_LIBLISTSZ:
+	  if (do_dynamic)
+	    {
+	      print_vma (entry->d_un.d_val, UNSIGNED);
+	      printf (" (bytes)\n");
+	    }
+	  break;
+
+	case DT_VERDEFNUM:
+	case DT_VERNEEDNUM:
+	case DT_RELACOUNT:
+	case DT_RELCOUNT:
+	  if (do_dynamic)
+	    {
+	      print_vma (entry->d_un.d_val, UNSIGNED);
+	      putchar ('\n');
+	    }
+	  break;
+
+	case DT_SYMINSZ:
+	case DT_SYMINENT:
+	case DT_SYMINFO:
+	case DT_USED:
+	case DT_INIT_ARRAY:
+	case DT_FINI_ARRAY:
+	  if (do_dynamic)
+	    {
+	      if (dynamic_strings != NULL && entry->d_tag == DT_USED)
+		{
+		  char * name;
+
+		  name = dynamic_strings + entry->d_un.d_val;
+
+		  if (* name)
+		    {
+		      printf (_("Not needed object: [%s]\n"), name);
+		      break;
+		    }
+		}
+
+	      print_vma (entry->d_un.d_val, PREFIX_HEX);
+	      putchar ('\n');
+	    }
+	  break;
+
+	case DT_BIND_NOW:
+	  /* The value of this entry is ignored.  */
+	  break;
+
+	case DT_GNU_PRELINKED:
+	  if (do_dynamic)
+	    {
+	      struct tm * tmp;
+	      time_t time = entry->d_un.d_val;
+
+	      tmp = gmtime (&time);
+	      printf ("%04u-%02u-%02uT%02u:%02u:%02u\n",
+		      tmp->tm_year + 1900, tmp->tm_mon + 1, tmp->tm_mday,
+		      tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+
+	    }
+	  break;
+
+	default:
+	  if ((entry->d_tag >= DT_VERSYM) && (entry->d_tag <= DT_VERNEEDNUM))
+	    version_info [DT_VERSIONTAGIDX (entry->d_tag)] =
+	      entry->d_un.d_val;
+
+	  if (do_dynamic)
+	    {
+	      switch (elf_header.e_machine)
+		{
+		case EM_MIPS:
+		case EM_MIPS_RS3_LE:
+		  dynamic_segment_mips_val (entry);
+		  break;
+		case EM_PARISC:
+		  dynamic_segment_parisc_val (entry);
+		  break;
+		default:
+		  print_vma (entry->d_un.d_val, PREFIX_HEX);
+		  putchar ('\n');
+		}
+	    }
+	  break;
+	}
+    }
+
+  return 1;
+}
+
+
+/* Process the reloc section.  */
+static int process_relocs (FILE * file)
+{
+  unsigned long    rel_size;
+  unsigned long	   rel_offset;
 
   if (!do_reloc)
-    return TRUE;
+    return 1;
 
   if (do_using_dynamic)
     {
-      int          is_rela;
-      const char * name;
-      bfd_boolean  has_dynamic_reloc;
-      unsigned int i;
+      int is_rela = FALSE;
 
-      has_dynamic_reloc = FALSE;
+      rel_size   = 0;
+      rel_offset = 0;
 
-      for (i = 0; i < ARRAY_SIZE (dynamic_relocations); i++)
+      if (dynamic_info[DT_REL])
 	{
-	  is_rela = dynamic_relocations [i].rela;
-	  name = dynamic_relocations [i].name;
-	  rel_size = dynamic_info [dynamic_relocations [i].size];
-	  rel_offset = dynamic_info [dynamic_relocations [i].reloc];
+	  rel_offset = dynamic_info[DT_REL];
+	  rel_size   = dynamic_info[DT_RELSZ];
+	  is_rela    = FALSE;
+	}
+      else if (dynamic_info [DT_RELA])
+	{
+	  rel_offset = dynamic_info[DT_RELA];
+	  rel_size   = dynamic_info[DT_RELASZ];
+	  is_rela    = TRUE;
+	}
+      else if (dynamic_info[DT_JMPREL])
+	{
+	  rel_offset = dynamic_info[DT_JMPREL];
+	  rel_size   = dynamic_info[DT_PLTRELSZ];
 
-	  if (rel_size)
-	    has_dynamic_reloc = TRUE;
-
-	  if (is_rela == UNKNOWN)
+	  switch (dynamic_info[DT_PLTREL])
 	    {
-	      if (dynamic_relocations [i].reloc == DT_JMPREL)
-		switch (dynamic_info[DT_PLTREL])
-		  {
-		  case DT_REL:
-		    is_rela = FALSE;
-		    break;
-		  case DT_RELA:
-		    is_rela = TRUE;
-		    break;
-		  }
-	    }
-
-	  if (rel_size)
-	    {
-	      printf
-		(_("\n'%s' relocation section at offset 0x%lx contains %ld bytes:\n"),
-		 name, rel_offset, rel_size);
-
-	      dump_relocations (filedata,
-				offset_from_vma (filedata, rel_offset, rel_size),
-				rel_size,
-				dynamic_symbols, num_dynamic_syms,
-				dynamic_strings, dynamic_strings_length,
-				is_rela, TRUE /* is_dynamic */);
+	    case DT_REL:
+	      is_rela = FALSE;
+	      break;
+	    case DT_RELA:
+	      is_rela = TRUE;
+	      break;
+	    default:
+	      is_rela = UNKNOWN;
+	      break;
 	    }
 	}
 
-      if (is_ia64_vms (filedata))
-        if (process_ia64_vms_dynamic_relocs (filedata))
-	  has_dynamic_reloc = TRUE;
+      if (rel_size)
+	{
+	  printf
+	    (_("\nRelocation section at offset 0x%lx contains %ld bytes:\n"),
+	     rel_offset, rel_size);
 
-      if (! has_dynamic_reloc)
+	  dump_relocations (file, rel_offset - loadaddr, rel_size,
+			    dynamic_symbols, num_dynamic_syms, dynamic_strings, is_rela);
+	}
+      else
 	printf (_("\nThere are no dynamic relocations in this file.\n"));
     }
   else
     {
-      Elf_Internal_Shdr * section;
-      unsigned long i;
-      bfd_boolean found = FALSE;
+      Elf32_Internal_Shdr *     section;
+      unsigned long		i;
+      int		found = 0;
 
-      for (i = 0, section = filedata->section_headers;
-	   i < filedata->file_header.e_shnum;
-	   i++, section++)
+      for (i = 0, section = section_headers;
+	   i < elf_header.e_shnum;
+	   i++, section ++)
 	{
 	  if (   section->sh_type != SHT_RELA
 	      && section->sh_type != SHT_REL)
@@ -1722,490 +1855,339 @@ static bfd_boolean process_relocs (Filedata * filedata)
 
 	  if (rel_size)
 	    {
-	      Elf_Internal_Shdr * strsec;
-	      int is_rela;
-	      unsigned long num_rela;
+	      Elf32_Internal_Shdr * strsec;
+	      Elf_Internal_Sym *    symtab;
+	      char *                strtab;
+	      int                   is_rela;
+	      unsigned long         nsyms;
 
 	      printf (_("\nRelocation section "));
 
-	      if (filedata->string_table == NULL)
-		printf ("%d", section->sh_name);
+	      if (string_table == NULL)
+			printf ("%d", section->sh_name);
 	      else
-		printf ("'%s'", printable_section_name (filedata, section));
+			printf (_("'%s'"), SECTION_NAME (section));
 
-	      num_rela = rel_size / section->sh_entsize;
-	      printf (ngettext (" at offset 0x%lx contains %lu entry:\n",
-				" at offset 0x%lx contains %lu entries:\n",
-				num_rela),
-		      rel_offset, num_rela);
+	      printf (_(" at offset 0x%lx contains %lu entries:\n"),
+		 rel_offset, (unsigned long) (rel_size / section->sh_entsize));
 
-	      is_rela = section->sh_type == SHT_RELA;
-
-	      if (section->sh_link != 0
-		  && section->sh_link < filedata->file_header.e_shnum)
+	      symtab = NULL;
+	      strtab = NULL;
+	      nsyms = 0;
+	      if (section->sh_link)
 		{
-		  Elf_Internal_Shdr * symsec;
-		  Elf_Internal_Sym *  symtab;
-		  unsigned long nsyms;
-		  unsigned long strtablen = 0;
-		  char * strtab = NULL;
+		  Elf32_Internal_Shdr * symsec;
 
-		  symsec = filedata->section_headers + section->sh_link;
-		  if (symsec->sh_type != SHT_SYMTAB
-		      && symsec->sh_type != SHT_DYNSYM)
-                    continue;
-
-		  symtab = GET_ELF_SYMBOLS (filedata, symsec, & nsyms);
+		  symsec = SECTION_HEADER (section->sh_link);
+		  nsyms = symsec->sh_size / symsec->sh_entsize;
+		  symtab = GET_ELF_SYMBOLS (file, symsec);
 
 		  if (symtab == NULL)
 		    continue;
 
-		  if (symsec->sh_link != 0
-		      && symsec->sh_link < filedata->file_header.e_shnum)
-		    {
-		      strsec = filedata->section_headers + symsec->sh_link;
+		  strsec = SECTION_HEADER (symsec->sh_link);
 
-		      strtab = (char *) get_data (NULL, filedata, strsec->sh_offset,
-						  1, strsec->sh_size,
-						  _("string table"));
-		      strtablen = strtab == NULL ? 0 : strsec->sh_size;
-		    }
-
-		  dump_relocations (filedata, rel_offset, rel_size,
-				    symtab, nsyms, strtab, strtablen,
-				    is_rela,
-				    symsec->sh_type == SHT_DYNSYM);
-		  if (strtab)
-		    free (strtab);
-		  free (symtab);
+		  strtab = (char *) get_data (NULL, file, strsec->sh_offset,
+					      strsec->sh_size,
+					      _("string table"));
 		}
-	      else
-		dump_relocations (filedata, rel_offset, rel_size,
-				  NULL, 0, NULL, 0, is_rela,
-				  FALSE /* is_dynamic */);
+	      is_rela = section->sh_type == SHT_RELA;
 
-	      found = TRUE;
+	      dump_relocations (file, rel_offset, rel_size,
+				symtab, nsyms, strtab, is_rela);
+
+	      if (strtab)
+		free (strtab);
+	      if (symtab)
+		free (symtab);
+
+	      found = 1;
 	    }
 	}
 
       if (! found)
-	{
-	  /* Users sometimes forget the -D option, so try to be helpful.  */
-	  for (i = 0; i < ARRAY_SIZE (dynamic_relocations); i++)
-	    {
-	      if (dynamic_info [dynamic_relocations [i].size])
-		{
-		  printf (_("\nThere are no static relocations in this file."));
-		  printf (_("\nTo see the dynamic relocations add --use-dynamic to the command line.\n"));
-
-		  break;
-		}
-	    }
-	  if (i == ARRAY_SIZE (dynamic_relocations))
-	    printf (_("\nThere are no relocations in this file.\n"));
-	}
+	printf (_("\nThere are no relocations in this file.\n"));
     }
 
-  return TRUE;
+  return 1;
 }
 
+
+
 /* Dump the symbol table.  */
-static bfd_boolean
-process_symbol_table (Filedata * filedata)
+static int process_symbol_table (FILE * file)
 {
-  Elf_Internal_Shdr * section;
-  bfd_size_type nbuckets = 0;
-  bfd_size_type nchains = 0;
-  bfd_vma * buckets = NULL;
-  bfd_vma * chains = NULL;
-  bfd_vma ngnubuckets = 0;
-  bfd_vma * gnubuckets = NULL;
-  bfd_vma * gnuchains = NULL;
-  bfd_vma * mipsxlat = NULL;
-  bfd_vma gnusymidx = 0;
-  bfd_size_type ngnuchains = 0;
+  Elf32_Internal_Shdr *   section;
+  unsigned char   nb [4];
+  unsigned char   nc [4];
+  int    nbuckets = 0;
+  int    nchains = 0;
+  int *  buckets = NULL;
+  int *  chains = NULL;
 
-  if (!do_syms && !do_dyn_syms && !do_histogram)
-    return TRUE;
+  if (! do_syms && !do_histogram)
+    return 1;
 
-  if (dynamic_info[DT_HASH]
-      && (do_histogram
-	  || (do_using_dynamic
-	      && !do_dyn_syms
-	      && dynamic_strings != NULL)))
+  if (dynamic_info[DT_HASH] && ((do_using_dynamic && dynamic_strings != NULL)
+				|| do_histogram))
     {
-      unsigned char nb[8];
-      unsigned char nc[8];
-      unsigned int hash_ent_size = 4;
-
-      if ((filedata->file_header.e_machine == EM_ALPHA
-	   || filedata->file_header.e_machine == EM_S390
-	   || filedata->file_header.e_machine == EM_S390_OLD)
-	  && filedata->file_header.e_ident[EI_CLASS] == ELFCLASS64)
-	hash_ent_size = 8;
-
-      if (fseek (filedata->handle,
-		 (archive_file_offset
-		  + offset_from_vma (filedata, dynamic_info[DT_HASH],
-				     sizeof nb + sizeof nc)),
-		 SEEK_SET))
+      if (fseek (file, dynamic_info[DT_HASH] - loadaddr, SEEK_SET))
 	{
-	  error (_("Unable to seek to start of dynamic information\n"));
-	  goto no_hash;
+	  error (_("Unable to seek to start of dynamic information"));
+	  return 0;
 	}
 
-      if (fread (nb, hash_ent_size, 1, filedata->handle) != 1)
+      if (fread (nb, sizeof (nb), 1, file) != 1)
 	{
 	  error (_("Failed to read in number of buckets\n"));
-	  goto no_hash;
+	  return 0;
 	}
 
-      if (fread (nc, hash_ent_size, 1, filedata->handle) != 1)
+      if (fread (nc, sizeof (nc), 1, file) != 1)
 	{
 	  error (_("Failed to read in number of chains\n"));
-	  goto no_hash;
+	  return 0;
 	}
 
-      nbuckets = byte_get (nb, hash_ent_size);
-      nchains  = byte_get (nc, hash_ent_size);
+      nbuckets = byte_get (nb, 4);
+      nchains  = byte_get (nc, 4);
 
-      buckets = get_dynamic_data (filedata, nbuckets, hash_ent_size);
-      chains  = get_dynamic_data (filedata, nchains, hash_ent_size);
+      buckets = get_dynamic_data (file, nbuckets);
+      chains  = get_dynamic_data (file, nchains);
 
-    no_hash:
       if (buckets == NULL || chains == NULL)
-	{
-	  if (do_using_dynamic)
-	    return FALSE;
-	  free (buckets);
-	  free (chains);
-	  buckets = NULL;
-	  chains = NULL;
-	  nbuckets = 0;
-	  nchains = 0;
-	}
+	return 0;
     }
 
-  if (dynamic_info_DT_GNU_HASH
-      && (do_histogram
-	  || (do_using_dynamic
-	      && !do_dyn_syms
-	      && dynamic_strings != NULL)))
+  if (do_syms
+      && dynamic_info[DT_HASH] && do_using_dynamic && dynamic_strings != NULL)
     {
-      unsigned char nb[16];
-      bfd_vma i, maxchain = 0xffffffff, bitmaskwords;
-      bfd_vma buckets_vma;
+      int    hn;
+      int    si;
 
-      if (fseek (filedata->handle,
-		 (archive_file_offset
-		  + offset_from_vma (filedata, dynamic_info_DT_GNU_HASH,
-				     sizeof nb)),
-		 SEEK_SET))
-	{
-	  error (_("Unable to seek to start of dynamic information\n"));
-	  goto no_gnu_hash;
-	}
-
-      if (fread (nb, 16, 1, filedata->handle) != 1)
-	{
-	  error (_("Failed to read in number of buckets\n"));
-	  goto no_gnu_hash;
-	}
-
-      ngnubuckets = byte_get (nb, 4);
-      gnusymidx = byte_get (nb + 4, 4);
-      bitmaskwords = byte_get (nb + 8, 4);
-      buckets_vma = dynamic_info_DT_GNU_HASH + 16;
+      printf (_("\nSymbol table for image:\n"));
       if (is_32bit_elf)
-	buckets_vma += bitmaskwords * 4;
+	printf (_("  Num Buc:    Value  Size   Type   Bind Vis      Ndx Name\n"));
       else
-	buckets_vma += bitmaskwords * 8;
+	printf (_("  Num Buc:    Value          Size   Type   Bind Vis      Ndx Name\n"));
 
-      if (fseek (filedata->handle,
-		 (archive_file_offset
-		  + offset_from_vma (filedata, buckets_vma, 4)),
-		 SEEK_SET))
+      for (hn = 0; hn < nbuckets; hn++)
 	{
-	  error (_("Unable to seek to start of dynamic information\n"));
-	  goto no_gnu_hash;
-	}
-
-      gnubuckets = get_dynamic_data (filedata, ngnubuckets, 4);
-
-      if (gnubuckets == NULL)
-	goto no_gnu_hash;
-
-      for (i = 0; i < ngnubuckets; i++)
-	if (gnubuckets[i] != 0)
-	  {
-	    if (gnubuckets[i] < gnusymidx)
-	      return FALSE;
-
-	    if (maxchain == 0xffffffff || gnubuckets[i] > maxchain)
-	      maxchain = gnubuckets[i];
-	  }
-
-      if (maxchain == 0xffffffff)
-	goto no_gnu_hash;
-
-      maxchain -= gnusymidx;
-
-      if (fseek (filedata->handle,
-		 (archive_file_offset
-		  + offset_from_vma (filedata, buckets_vma
-					   + 4 * (ngnubuckets + maxchain), 4)),
-		 SEEK_SET))
-	{
-	  error (_("Unable to seek to start of dynamic information\n"));
-	  goto no_gnu_hash;
-	}
-
-      do
-	{
-	  if (fread (nb, 4, 1, filedata->handle) != 1)
-	    {
-	      error (_("Failed to determine last chain length\n"));
-	      goto no_gnu_hash;
-	    }
-
-	  if (maxchain + 1 == 0)
-	    goto no_gnu_hash;
-
-	  ++maxchain;
-	}
-      while ((byte_get (nb, 4) & 1) == 0);
-
-      if (fseek (filedata->handle,
-		 (archive_file_offset
-		  + offset_from_vma (filedata, buckets_vma + 4 * ngnubuckets, 4)),
-		 SEEK_SET))
-	{
-	  error (_("Unable to seek to start of dynamic information\n"));
-	  goto no_gnu_hash;
-	}
-
-      gnuchains = get_dynamic_data (filedata, maxchain, 4);
-      ngnuchains = maxchain;
-
-      if (gnuchains == NULL)
-	goto no_gnu_hash;
-
-      if (dynamic_info_DT_MIPS_XHASH)
-	{
-	  if (fseek (filedata->handle,
-		     (archive_file_offset
-		      + offset_from_vma (filedata, (buckets_vma
-						    + 4 * (ngnubuckets
-							   + maxchain)), 4)),
-		     SEEK_SET))
-	    {
-	      error (_("Unable to seek to start of dynamic information\n"));
-	      goto no_gnu_hash;
-	    }
-
-	  mipsxlat = get_dynamic_data (filedata, maxchain, 4);
-	}
-
-    no_gnu_hash:
-      if (dynamic_info_DT_MIPS_XHASH && mipsxlat == NULL)
-	{
-	  free (gnuchains);
-	  gnuchains = NULL;
-	}
-      if (gnuchains == NULL)
-	{
-	  free (gnubuckets);
-	  gnubuckets = NULL;
-	  ngnubuckets = 0;
-	  if (do_using_dynamic)
-	    return FALSE;
-	}
-    }
-
-  if ((dynamic_info[DT_HASH] || dynamic_info_DT_GNU_HASH)
-      && do_syms
-      && do_using_dynamic
-      && dynamic_strings != NULL
-      && dynamic_symbols != NULL)
-    {
-      unsigned long hn;
-
-      if (dynamic_info[DT_HASH])
-	{
-	  bfd_vma si;
-	  char *visited;
-
-	  printf (_("\nSymbol table for image:\n"));
-	  if (is_32bit_elf)
-	    printf (_("  Num Buc:    Value  Size   Type   Bind Vis      Ndx Name\n"));
-	  else
-	    printf (_("  Num Buc:    Value          Size   Type   Bind Vis      Ndx Name\n"));
-
-	  visited = xcmalloc (nchains, 1);
-	  memset (visited, 0, nchains);
-	  for (hn = 0; hn < nbuckets; hn++)
-	    {
-	      for (si = buckets[hn]; si > 0; si = chains[si])
-		{
-		  print_dynamic_symbol (filedata, si, hn);
-		  if (si >= nchains || visited[si])
-		    {
-		      error (_("histogram chain is corrupt\n"));
-		      break;
-		    }
-		  visited[si] = 1;
-		}
-	    }
-	  free (visited);
-	}
-
-      if (dynamic_info_DT_GNU_HASH)
-	{
-	  printf (_("\nSymbol table of `%s' for image:\n"),
-		  GNU_HASH_SECTION_NAME);
-	  if (is_32bit_elf)
-	    printf (_("  Num Buc:    Value  Size   Type   Bind Vis      Ndx Name\n"));
-	  else
-	    printf (_("  Num Buc:    Value          Size   Type   Bind Vis      Ndx Name\n"));
-
-	  for (hn = 0; hn < ngnubuckets; ++hn)
-	    if (gnubuckets[hn] != 0)
-	      {
-		bfd_vma si = gnubuckets[hn];
-		bfd_vma off = si - gnusymidx;
-
-		do
-		  {
-		    if (dynamic_info_DT_MIPS_XHASH)
-		      print_dynamic_symbol (filedata, mipsxlat[off], hn);
-		    else
-		      print_dynamic_symbol (filedata, si, hn);
-		    si++;
-		  }
-		while (off < ngnuchains && (gnuchains[off++] & 1) == 0);
-	      }
-	}
-    }
-  else if ((do_dyn_syms || (do_syms && !do_using_dynamic))
-	   && filedata->section_headers != NULL)
-    {
-      unsigned int i;
-
-      for (i = 0, section = filedata->section_headers;
-	   i < filedata->file_header.e_shnum;
-	   i++, section++)
-	{
-	  unsigned int si;
-	  char * strtab = NULL;
-	  unsigned long int strtab_size = 0;
-	  Elf_Internal_Sym * symtab;
-	  Elf_Internal_Sym * psym;
-	  unsigned long num_syms;
-
-	  if ((section->sh_type != SHT_SYMTAB
-	       && section->sh_type != SHT_DYNSYM)
-	      || (!do_syms
-		  && section->sh_type == SHT_SYMTAB))
+	  if (! buckets [hn])
 	    continue;
 
-	  if (section->sh_entsize == 0)
+	  for (si = buckets [hn]; si < nchains && si > 0; si = chains [si])
 	    {
-	      printf (_("\nSymbol table '%s' has a sh_entsize of zero!\n"),
-		      printable_section_name (filedata, section));
-	      continue;
+	      Elf_Internal_Sym * psym;
+
+	      psym = dynamic_symbols + si;
+
+	      printf ("  %3d %3d: ", si, hn);
+	      print_vma (psym->st_value, LONG_HEX);
+	      putchar (' ' );
+	      print_vma (psym->st_size, DEC_5);
+
+	      printf ("  %6s", get_symbol_type (ELF_ST_TYPE (psym->st_info)));
+	      printf (" %6s",  get_symbol_binding (ELF_ST_BIND (psym->st_info)));
+	      printf (" %3s",  get_symbol_visibility (ELF_ST_VISIBILITY (psym->st_other)));
+	      printf (" %3.3s ", get_symbol_index_type (psym->st_shndx));
+	      print_symbol (25, dynamic_strings + psym->st_name);
+	      putchar ('\n');
 	    }
+	}
+    }
+  else if (do_syms && !do_using_dynamic)
+    {
+      unsigned int     i;
 
-	  num_syms = section->sh_size / section->sh_entsize;
-	  printf (ngettext ("\nSymbol table '%s' contains %lu entry:\n",
-			    "\nSymbol table '%s' contains %lu entries:\n",
-			    num_syms),
-		  printable_section_name (filedata, section),
-		  num_syms);
+      for (i = 0, section = section_headers;
+	   i < elf_header.e_shnum;
+	   i++, section++)
+	{
+	  unsigned int          si;
+	  char *                strtab;
+	  Elf_Internal_Sym *    symtab;
+	  Elf_Internal_Sym *    psym;
 
+
+	  if (   section->sh_type != SHT_SYMTAB
+	      && section->sh_type != SHT_DYNSYM)
+	    continue;
+
+	  printf (_("\nSymbol table '%s' contains %lu entries:\n"),
+		  SECTION_NAME (section),
+		  (unsigned long) (section->sh_size / section->sh_entsize));
 	  if (is_32bit_elf)
 	    printf (_("   Num:    Value  Size Type    Bind   Vis      Ndx Name\n"));
 	  else
 	    printf (_("   Num:    Value          Size Type    Bind   Vis      Ndx Name\n"));
 
-	  symtab = GET_ELF_SYMBOLS (filedata, section, & num_syms);
+	  symtab = GET_ELF_SYMBOLS (file, section);
 	  if (symtab == NULL)
 	    continue;
 
-	  if (section->sh_link == filedata->file_header.e_shstrndx)
+	  if (section->sh_link == elf_header.e_shstrndx)
+	    strtab = string_table;
+	  else
 	    {
-	      strtab = filedata->string_table;
-	      strtab_size = filedata->string_table_length;
-	    }
-	  else if (section->sh_link < filedata->file_header.e_shnum)
-	    {
-	      Elf_Internal_Shdr * string_sec;
+	      Elf32_Internal_Shdr * string_sec;
 
-	      string_sec = filedata->section_headers + section->sh_link;
+	      string_sec = SECTION_HEADER (section->sh_link);
 
-	      strtab = (char *) get_data (NULL, filedata, string_sec->sh_offset,
-                                          1, string_sec->sh_size,
-                                          _("string table"));
-	      strtab_size = strtab != NULL ? string_sec->sh_size : 0;
+	      strtab = (char *) get_data (NULL, file, string_sec->sh_offset,
+					  string_sec->sh_size,
+					  _("string table"));
 	    }
 
-	  for (si = 0, psym = symtab; si < num_syms; si++, psym++)
+	  for (si = 0, psym = symtab;
+	       si < section->sh_size / section->sh_entsize;
+	       si ++, psym ++)
 	    {
-	      const char *version_string;
-	      enum versioned_symbol_info sym_info;
-	      unsigned short vna_other;
-
 	      printf ("%6d: ", si);
 	      print_vma (psym->st_value, LONG_HEX);
 	      putchar (' ');
 	      print_vma (psym->st_size, DEC_5);
-	      printf (" %-7s", get_symbol_type (filedata, ELF_ST_TYPE (psym->st_info)));
-	      printf (" %-6s", get_symbol_binding (filedata, ELF_ST_BIND (psym->st_info)));
-	      if (filedata->file_header.e_ident[EI_OSABI] == ELFOSABI_SOLARIS)
-		printf (" %-7s",  get_solaris_symbol_visibility (psym->st_other));
-	      else
-		{
-		  unsigned int vis = ELF_ST_VISIBILITY (psym->st_other);
+	      printf (" %-7s", get_symbol_type (ELF_ST_TYPE (psym->st_info)));
+	      printf (" %-6s", get_symbol_binding (ELF_ST_BIND (psym->st_info)));
+	      printf (" %-3s", get_symbol_visibility (ELF_ST_VISIBILITY (psym->st_other)));
+	      printf (" %4s ", get_symbol_index_type (psym->st_shndx));
+	      print_symbol (25, strtab + psym->st_name);
 
-		  printf (" %-7s", get_symbol_visibility (vis));
-		  /* Check to see if any other bits in the st_other field are set.
-		     Note - displaying this information disrupts the layout of the
-		     table being generated, but for the moment this case is very rare.  */
-		  if (psym->st_other ^ vis)
-		    printf (" [%s] ", get_symbol_other (filedata, psym->st_other ^ vis));
-		}
-	      printf (" %4s ", get_symbol_index_type (filedata, psym->st_shndx));
-	      print_symbol (25, psym->st_name < strtab_size
-			    ? strtab + psym->st_name : _("<corrupt>"));
-
-	      version_string
-		= get_symbol_version_string (filedata,
-					     section->sh_type == SHT_DYNSYM,
-					     strtab, strtab_size, si,
-					     psym, &sym_info, &vna_other);
-	      if (version_string)
+	      if (section->sh_type == SHT_DYNSYM &&
+		  version_info [DT_VERSIONTAGIDX (DT_VERSYM)] != 0)
 		{
-		  if (sym_info == symbol_undefined)
-		    printf ("@%s (%d)", version_string, vna_other);
-		  else
-		    printf (sym_info == symbol_hidden ? "@%s" : "@@%s",
-			    version_string);
+		  unsigned char   data[2];
+		  unsigned short  vers_data;
+		  unsigned long   offset;
+		  int             is_nobits;
+		  int             check_def;
+
+		  offset = version_info [DT_VERSIONTAGIDX (DT_VERSYM)]
+		    - loadaddr;
+
+		  get_data (&data, file, offset + si * sizeof (vers_data),
+			    sizeof (data), _("version data"));
+
+		  vers_data = byte_get (data, 2);
+
+		  is_nobits = (SECTION_HEADER (psym->st_shndx)->sh_type
+			       == SHT_NOBITS);
+
+		  check_def = (psym->st_shndx != SHN_UNDEF);
+
+		  if ((vers_data & 0x8000) || vers_data > 1)
+		    {
+		      if (version_info [DT_VERSIONTAGIDX (DT_VERNEED)]
+			  && (is_nobits || ! check_def))
+			{
+			  Elf_External_Verneed  evn;
+			  Elf_Internal_Verneed  ivn;
+			  Elf_Internal_Vernaux  ivna;
+
+			  /* We must test both.  */
+			  offset = version_info
+			    [DT_VERSIONTAGIDX (DT_VERNEED)] - loadaddr;
+
+			  do
+			    {
+			      unsigned long  vna_off;
+
+			      get_data (&evn, file, offset, sizeof (evn),
+					_("version need"));
+
+			      ivn.vn_aux  = BYTE_GET (evn.vn_aux);
+			      ivn.vn_next = BYTE_GET (evn.vn_next);
+
+			      vna_off = offset + ivn.vn_aux;
+
+			      do
+				{
+				  Elf_External_Vernaux  evna;
+
+				  get_data (&evna, file, vna_off,
+					    sizeof (evna),
+					    _("version need aux (3)"));
+
+				  ivna.vna_other = BYTE_GET (evna.vna_other);
+				  ivna.vna_next  = BYTE_GET (evna.vna_next);
+				  ivna.vna_name  = BYTE_GET (evna.vna_name);
+
+				  vna_off += ivna.vna_next;
+				}
+			      while (ivna.vna_other != vers_data
+				     && ivna.vna_next != 0);
+
+			      if (ivna.vna_other == vers_data)
+				break;
+
+			      offset += ivn.vn_next;
+			    }
+			  while (ivn.vn_next != 0);
+
+			  if (ivna.vna_other == vers_data)
+			    {
+			      printf ("@%s (%d)",
+				      strtab + ivna.vna_name, ivna.vna_other);
+			      check_def = 0;
+			    }
+			  else if (! is_nobits)
+			    error (_("bad dynamic symbol"));
+			  else
+			    check_def = 1;
+			}
+
+		      if (check_def)
+			{
+			  if (vers_data != 0x8001
+			      && version_info [DT_VERSIONTAGIDX (DT_VERDEF)])
+			    {
+			      Elf_Internal_Verdef     ivd;
+			      Elf_Internal_Verdaux    ivda;
+			      Elf_External_Verdaux  evda;
+			      unsigned long           offset;
+
+			      offset =
+				version_info [DT_VERSIONTAGIDX (DT_VERDEF)]
+				- loadaddr;
+
+			      do
+				{
+				  Elf_External_Verdef   evd;
+
+				  get_data (&evd, file, offset, sizeof (evd),
+					    _("version def"));
+
+				  ivd.vd_ndx  = BYTE_GET (evd.vd_ndx);
+				  ivd.vd_aux  = BYTE_GET (evd.vd_aux);
+				  ivd.vd_next = BYTE_GET (evd.vd_next);
+
+				  offset += ivd.vd_next;
+				}
+			      while (ivd.vd_ndx != (vers_data & 0x7fff)
+				     && ivd.vd_next != 0);
+
+			      offset -= ivd.vd_next;
+			      offset += ivd.vd_aux;
+
+			      get_data (&evda, file, offset, sizeof (evda),
+					_("version def aux"));
+
+			      ivda.vda_name = BYTE_GET (evda.vda_name);
+
+			      if (psym->st_name != ivda.vda_name)
+				printf ((vers_data & 0x8000)
+					? "@%s" : "@@%s",
+					strtab + ivda.vda_name);
+			    }
+			}
+		    }
 		}
 
 	      putchar ('\n');
-
-	      if (ELF_ST_BIND (psym->st_info) == STB_LOCAL
-		  && si >= section->sh_info
-		  /* Irix 5 and 6 MIPS binaries are known to ignore this requirement.  */
-		  && filedata->file_header.e_machine != EM_MIPS
-		  /* Solaris binaries have been found to violate this requirement as
-		     well.  Not sure if this is a bug or an ABI requirement.  */
-		  && filedata->file_header.e_ident[EI_OSABI] != ELFOSABI_SOLARIS)
-		warn (_("local symbol %u found at index >= %s's sh_info value of %u\n"),
-		      si, printable_section_name (filedata, section), section->sh_info);
 	    }
 
 	  free (symtab);
-	  if (strtab != filedata->string_table)
+	  if (strtab != string_table)
 	    free (strtab);
 	}
     }
@@ -2215,70 +2197,56 @@ process_symbol_table (Filedata * filedata)
 
   if (do_histogram && buckets != NULL)
     {
-      unsigned long * lengths;
-      unsigned long * counts;
-      unsigned long hn;
-      bfd_vma si;
-      unsigned long maxlength = 0;
-      unsigned long nzero_counts = 0;
-      unsigned long nsyms = 0;
-      char *visited;
+      int * lengths;
+      int * counts;
+      int   hn;
+      int   si;
+      int   maxlength = 0;
+      int   nzero_counts = 0;
+      int   nsyms = 0;
 
-      printf (ngettext ("\nHistogram for bucket list length "
-			"(total of %lu bucket):\n",
-			"\nHistogram for bucket list length "
-			"(total of %lu buckets):\n",
-			(unsigned long) nbuckets),
-	      (unsigned long) nbuckets);
+      printf (_("\nHistogram for bucket list length (total of %d buckets):\n"),
+	      nbuckets);
+      printf (_(" Length  Number     %% of total  Coverage\n"));
 
-      lengths = (unsigned long *) calloc (nbuckets, sizeof (*lengths));
+      lengths = (int *) calloc (nbuckets, sizeof (int));
       if (lengths == NULL)
 	{
-	  error (_("Out of memory allocating space for histogram buckets\n"));
-	  return FALSE;
+	  error (_("Out of memory"));
+	  return 0;
 	}
-      visited = xcmalloc (nchains, 1);
-      memset (visited, 0, nchains);
-
-      printf (_(" Length  Number     %% of total  Coverage\n"));
       for (hn = 0; hn < nbuckets; ++hn)
 	{
-	  for (si = buckets[hn]; si > 0; si = chains[si])
+	  if (! buckets [hn])
+	    continue;
+
+	  for (si = buckets[hn]; si > 0 && si < nchains; si = chains[si])
 	    {
-	      ++nsyms;
+	      ++ nsyms;
 	      if (maxlength < ++lengths[hn])
-		++maxlength;
-	      if (si >= nchains || visited[si])
-		{
-		  error (_("histogram chain is corrupt\n"));
-		  break;
-		}
-	      visited[si] = 1;
+		++ maxlength;
 	    }
 	}
-      free (visited);
 
-      counts = (unsigned long *) calloc (maxlength + 1, sizeof (*counts));
+      counts = (int *) calloc (maxlength + 1, sizeof (int));
       if (counts == NULL)
 	{
-	  free (lengths);
-	  error (_("Out of memory allocating space for histogram counts\n"));
-	  return FALSE;
+	  error (_("Out of memory"));
+	  return 0;
 	}
 
       for (hn = 0; hn < nbuckets; ++hn)
-	++counts[lengths[hn]];
+	++ counts [lengths [hn]];
 
       if (nbuckets > 0)
 	{
-	  unsigned long i;
-	  printf ("      0  %-10lu (%5.1f%%)\n",
+	  printf ("      0  %-10d (%5.1f%%)\n",
 		  counts[0], (counts[0] * 100.0) / nbuckets);
-	  for (i = 1; i <= maxlength; ++i)
+	  for (si = 1; si <= maxlength; ++si)
 	    {
-	      nzero_counts += counts[i] * i;
-	      printf ("%7lu  %-10lu (%5.1f%%)    %5.1f%%\n",
-		      i, counts[i], (counts[i] * 100.0) / nbuckets,
+	      nzero_counts += counts[si] * si;
+	      printf ("%7d  %-10d (%5.1f%%)    %5.1f%%\n",
+		      si, counts[si], (counts[si] * 100.0) / nbuckets,
 		      (nzero_counts * 100.0) / nsyms);
 	    }
 	}
@@ -2293,102 +2261,25 @@ process_symbol_table (Filedata * filedata)
       free (chains);
     }
 
-  if (do_histogram && gnubuckets != NULL)
-    {
-      unsigned long * lengths;
-      unsigned long * counts;
-      unsigned long hn;
-      unsigned long maxlength = 0;
-      unsigned long nzero_counts = 0;
-      unsigned long nsyms = 0;
-
-      printf (ngettext ("\nHistogram for `%s' bucket list length "
-			"(total of %lu bucket):\n",
-			"\nHistogram for `%s' bucket list length "
-			"(total of %lu buckets):\n",
-			(unsigned long) ngnubuckets),
-	      GNU_HASH_SECTION_NAME,
-	      (unsigned long) ngnubuckets);
-
-      lengths = (unsigned long *) calloc (ngnubuckets, sizeof (*lengths));
-      if (lengths == NULL)
-	{
-	  error (_("Out of memory allocating space for gnu histogram buckets\n"));
-	  return FALSE;
-	}
-
-      printf (_(" Length  Number     %% of total  Coverage\n"));
-
-      for (hn = 0; hn < ngnubuckets; ++hn)
-	if (gnubuckets[hn] != 0)
-	  {
-	    bfd_vma off, length = 1;
-
-	    for (off = gnubuckets[hn] - gnusymidx;
-		 /* PR 17531 file: 010-77222-0.004.  */
-		 off < ngnuchains && (gnuchains[off] & 1) == 0;
-		 ++off)
-	      ++length;
-	    lengths[hn] = length;
-	    if (length > maxlength)
-	      maxlength = length;
-	    nsyms += length;
-	  }
-
-      counts = (unsigned long *) calloc (maxlength + 1, sizeof (*counts));
-      if (counts == NULL)
-	{
-	  free (lengths);
-	  error (_("Out of memory allocating space for gnu histogram counts\n"));
-	  return FALSE;
-	}
-
-      for (hn = 0; hn < ngnubuckets; ++hn)
-	++counts[lengths[hn]];
-
-      if (ngnubuckets > 0)
-	{
-	  unsigned long j;
-	  printf ("      0  %-10lu (%5.1f%%)\n",
-		  counts[0], (counts[0] * 100.0) / ngnubuckets);
-	  for (j = 1; j <= maxlength; ++j)
-	    {
-	      nzero_counts += counts[j] * j;
-	      printf ("%7lu  %-10lu (%5.1f%%)    %5.1f%%\n",
-		      j, counts[j], (counts[j] * 100.0) / ngnubuckets,
-		      (nzero_counts * 100.0) / nsyms);
-	    }
-	}
-
-      free (counts);
-      free (lengths);
-      free (gnubuckets);
-      free (gnuchains);
-      free (mipsxlat);
-    }
-
-  return TRUE;
+  return 1;
 }
-static bfd_boolean
-process_syminfo (Filedata * filedata ATTRIBUTE_UNUSED)
+
+
+static int process_syminfo (FILE * file ATTRIBUTE_UNUSED)
 {
   unsigned int i;
 
   if (dynamic_syminfo == NULL
       || !do_dynamic)
     /* No syminfo, this is ok.  */
-    return TRUE;
+    return 1;
 
   /* There better should be a dynamic symbol section.  */
   if (dynamic_symbols == NULL || dynamic_strings == NULL)
-    return FALSE;
+    return 0;
 
   if (dynamic_addr)
-    printf (ngettext ("\nDynamic info segment at offset 0x%lx "
-		      "contains %d entry:\n",
-		      "\nDynamic info segment at offset 0x%lx "
-		      "contains %d entries:\n",
-		      dynamic_syminfo_nent),
+    printf (_("\nDynamic info segment at offset 0x%lx contains %d entries:\n"),
 	    dynamic_syminfo_offset, dynamic_syminfo_nent);
 
   printf (_(" Num: Name                           BoundTo     Flags\n"));
@@ -2397,12 +2288,7 @@ process_syminfo (Filedata * filedata ATTRIBUTE_UNUSED)
       unsigned short int flags = dynamic_syminfo[i].si_flags;
 
       printf ("%4d: ", i);
-      if (i >= num_dynamic_syms)
-	printf (_("<corrupt index>"));
-      else if (VALID_DYNAMIC_NAME (dynamic_symbols[i].st_name))
-	print_symbol (30, GET_DYNAMIC_NAME (dynamic_symbols[i].st_name));
-      else
-	printf (_("<corrupt: %19ld>"), dynamic_symbols[i].st_name);
+      print_symbol (30, dynamic_strings + dynamic_symbols[i].st_name);
       putchar (' ');
 
       switch (dynamic_syminfo[i].si_boundto)
@@ -2415,10 +2301,11 @@ process_syminfo (Filedata * filedata ATTRIBUTE_UNUSED)
 	  break;
 	default:
 	  if (dynamic_syminfo[i].si_boundto > 0
-	      && dynamic_syminfo[i].si_boundto < dynamic_nent
-	      && VALID_DYNAMIC_NAME (dynamic_section[dynamic_syminfo[i].si_boundto].d_un.d_val))
+	      && dynamic_syminfo[i].si_boundto < dynamic_size)
 	    {
-	      print_symbol (10, GET_DYNAMIC_NAME (dynamic_section[dynamic_syminfo[i].si_boundto].d_un.d_val));
+	      print_symbol (10, dynamic_strings
+			    + dynamic_segment
+			    [dynamic_syminfo[i].si_boundto].d_un.d_val);
 	      putchar (' ' );
 	    }
 	  else
@@ -2438,69 +2325,64 @@ process_syminfo (Filedata * filedata ATTRIBUTE_UNUSED)
       puts ("");
     }
 
-  return TRUE;
+  return 1;
 }
 
 
+
+
 /* Display the contents of the version sections.  */
-static bfd_boolean process_version_sections (Filedata * filedata)
+static int process_version_sections (FILE * file)
 {
-  Elf_Internal_Shdr * section;
-  unsigned i;
-  bfd_boolean found = FALSE;
+  Elf32_Internal_Shdr * section;
+  unsigned   i;
+  int        found = 0;
 
   if (! do_version)
-    return TRUE;
+    return 1;
 
-  for (i = 0, section = filedata->section_headers;
-       i < filedata->file_header.e_shnum;
-       i++, section++)
+  for (i = 0, section = section_headers;
+       i < elf_header.e_shnum;
+       i++, section ++)
     {
       switch (section->sh_type)
 	{
 	case SHT_GNU_verdef:
 	  {
 	    Elf_External_Verdef * edefs;
-	    unsigned long idx;
-	    unsigned long cnt;
-	    char * endbuf;
+	    unsigned int          idx;
+	    unsigned int          cnt;
 
-	    found = TRUE;
+	    found = 1;
 
-	    printf (ngettext ("\nVersion definition section '%s' "
-			      "contains %u entry:\n",
-			      "\nVersion definition section '%s' "
-			      "contains %u entries:\n",
-			      section->sh_info),
-		    printable_section_name (filedata, section),
-		    section->sh_info);
+	    printf
+	      (_("\nVersion definition section '%s' contains %ld entries:\n"),
+	       SECTION_NAME (section), section->sh_info);
 
-	    printf (_(" Addr: 0x"));
+	    printf (_("  Addr: 0x"));
 	    printf_vma (section->sh_addr);
-	    printf (_("  Offset: %#08lx  Link: %u (%s)\n"),
+	    printf (_("  Offset: %#08lx  Link: %lx (%s)\n"),
 		    (unsigned long) section->sh_offset, section->sh_link,
-		    printable_section_name_from_index (filedata, section->sh_link));
+		    SECTION_NAME (SECTION_HEADER (section->sh_link)));
 
-	    edefs = (Elf_External_Verdef *)
-                get_data (NULL, filedata, section->sh_offset, 1,section->sh_size,
-                          _("version definition section"));
+	    edefs = ((Elf_External_Verdef *)
+		     get_data (NULL, file, section->sh_offset,
+			       section->sh_size,
+			       _("version definition section")));
 	    if (!edefs)
 	      break;
-	    endbuf = (char *) edefs + section->sh_size;
 
-	    for (idx = cnt = 0; cnt < section->sh_info; ++cnt)
+	    for (idx = cnt = 0; cnt < section->sh_info; ++ cnt)
 	      {
-		char * vstart;
-		Elf_External_Verdef * edef;
-		Elf_Internal_Verdef ent;
+		char *                 vstart;
+		Elf_External_Verdef *  edef;
+		Elf_Internal_Verdef    ent;
 		Elf_External_Verdaux * eaux;
-		Elf_Internal_Verdaux aux;
-		unsigned long isum;
-		int j;
+		Elf_Internal_Verdaux   aux;
+		int                    j;
+		int                    isum;
 
 		vstart = ((char *) edefs) + idx;
-		if (vstart + sizeof (*edef) > endbuf)
-		  break;
 
 		edef = (Elf_External_Verdef *) vstart;
 
@@ -2512,84 +2394,46 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 		ent.vd_aux     = BYTE_GET (edef->vd_aux);
 		ent.vd_next    = BYTE_GET (edef->vd_next);
 
-		printf (_("  %#06lx: Rev: %d  Flags: %s"),
+		printf (_("  %#06x: Rev: %d  Flags: %s"),
 			idx, ent.vd_version, get_ver_flags (ent.vd_flags));
 
 		printf (_("  Index: %d  Cnt: %d  "),
 			ent.vd_ndx, ent.vd_cnt);
 
-		/* Check for overflow.  */
-		if (ent.vd_aux > (size_t) (endbuf - vstart))
-		  break;
-
 		vstart += ent.vd_aux;
 
-		if (vstart + sizeof (*eaux) > endbuf)
-		  break;
 		eaux = (Elf_External_Verdaux *) vstart;
 
 		aux.vda_name = BYTE_GET (eaux->vda_name);
 		aux.vda_next = BYTE_GET (eaux->vda_next);
 
-		if (VALID_DYNAMIC_NAME (aux.vda_name))
-		  printf (_("Name: %s\n"), GET_DYNAMIC_NAME (aux.vda_name));
+		if (dynamic_strings)
+		  printf (_("Name: %s\n"), dynamic_strings + aux.vda_name);
 		else
 		  printf (_("Name index: %ld\n"), aux.vda_name);
 
 		isum = idx + ent.vd_aux;
 
-		for (j = 1; j < ent.vd_cnt; j++)
+		for (j = 1; j < ent.vd_cnt; j ++)
 		  {
-		    if (aux.vda_next < sizeof (*eaux)
-			&& !(j == ent.vd_cnt - 1 && aux.vda_next == 0))
-		      {
-			warn (_("Invalid vda_next field of %lx\n"),
-			      aux.vda_next);
-			j = ent.vd_cnt;
-			break;
-		      }
-		    /* Check for overflow.  */
-		    if (aux.vda_next > (size_t) (endbuf - vstart))
-		      break;
-
 		    isum   += aux.vda_next;
 		    vstart += aux.vda_next;
 
-		    if (vstart + sizeof (*eaux) > endbuf)
-		      break;
 		    eaux = (Elf_External_Verdaux *) vstart;
 
 		    aux.vda_name = BYTE_GET (eaux->vda_name);
 		    aux.vda_next = BYTE_GET (eaux->vda_next);
 
-		    if (VALID_DYNAMIC_NAME (aux.vda_name))
-		      printf (_("  %#06lx: Parent %d: %s\n"),
-			      isum, j, GET_DYNAMIC_NAME (aux.vda_name));
+		    if (dynamic_strings)
+		      printf (_("  %#06x: Parent %d: %s\n"),
+			      isum, j, dynamic_strings + aux.vda_name);
 		    else
-		      printf (_("  %#06lx: Parent %d, name index: %ld\n"),
+		      printf (_("  %#06x: Parent %d, name index: %ld\n"),
 			      isum, j, aux.vda_name);
 		  }
 
-		if (j < ent.vd_cnt)
-		  printf (_("  Version def aux past end of section\n"));
-
-		/* PR 17531:
-		   file: id:000001,src:000172+005151,op:splice,rep:2.  */
-		if (ent.vd_next < sizeof (*edef)
-		    && !(cnt == section->sh_info - 1 && ent.vd_next == 0))
-		  {
-		    warn (_("Invalid vd_next field of %lx\n"), ent.vd_next);
-		    cnt = section->sh_info;
-		    break;
-		  }
-		if (ent.vd_next > (size_t) (endbuf - ((char *) edefs + idx)))
-		  break;
-
 		idx += ent.vd_next;
 	      }
-
-	    if (cnt < section->sh_info)
-	      printf (_("  Version definition past end of section\n"));
 
 	    free (edefs);
 	  }
@@ -2597,45 +2441,36 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 
 	case SHT_GNU_verneed:
 	  {
-	    Elf_External_Verneed * eneed;
-	    unsigned long idx;
-	    unsigned long cnt;
-	    char * endbuf;
+	    Elf_External_Verneed *  eneed;
+	    unsigned int            idx;
+	    unsigned int            cnt;
 
-	    found = TRUE;
+	    found = 1;
 
-	    printf (ngettext ("\nVersion needs section '%s' "
-			      "contains %u entry:\n",
-			      "\nVersion needs section '%s' "
-			      "contains %u entries:\n",
-			      section->sh_info),
-		    printable_section_name (filedata, section), section->sh_info);
+	    printf (_("\nVersion needs section '%s' contains %ld entries:\n"),
+		    SECTION_NAME (section), section->sh_info);
 
 	    printf (_(" Addr: 0x"));
 	    printf_vma (section->sh_addr);
-	    printf (_("  Offset: %#08lx  Link: %u (%s)\n"),
+	    printf (_("  Offset: %#08lx  Link to section: %ld (%s)\n"),
 		    (unsigned long) section->sh_offset, section->sh_link,
-		    printable_section_name_from_index (filedata, section->sh_link));
+		    SECTION_NAME (SECTION_HEADER (section->sh_link)));
 
-	    eneed = (Elf_External_Verneed *) get_data (NULL, filedata,
-                                                       section->sh_offset, 1,
-                                                       section->sh_size,
-                                                       _("Version Needs section"));
+	    eneed = ((Elf_External_Verneed *)
+		     get_data (NULL, file, section->sh_offset,
+			       section->sh_size, _("version need section")));
 	    if (!eneed)
 	      break;
-	    endbuf = (char *) eneed + section->sh_size;
 
 	    for (idx = cnt = 0; cnt < section->sh_info; ++cnt)
 	      {
 		Elf_External_Verneed * entry;
-		Elf_Internal_Verneed ent;
-		unsigned long isum;
-		int j;
-		char * vstart;
+		Elf_Internal_Verneed     ent;
+		int                      j;
+		int                      isum;
+		char *                   vstart;
 
 		vstart = ((char *) eneed) + idx;
-		if (vstart + sizeof (*entry) > endbuf)
-		  break;
 
 		entry = (Elf_External_Verneed *) vstart;
 
@@ -2645,27 +2480,22 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 		ent.vn_aux     = BYTE_GET (entry->vn_aux);
 		ent.vn_next    = BYTE_GET (entry->vn_next);
 
-		printf (_("  %#06lx: Version: %d"), idx, ent.vn_version);
+		printf (_("  %#06x: Version: %d"), idx, ent.vn_version);
 
-		if (VALID_DYNAMIC_NAME (ent.vn_file))
-		  printf (_("  File: %s"), GET_DYNAMIC_NAME (ent.vn_file));
+		if (dynamic_strings)
+		  printf (_("  File: %s"), dynamic_strings + ent.vn_file);
 		else
 		  printf (_("  File: %lx"), ent.vn_file);
 
 		printf (_("  Cnt: %d\n"), ent.vn_cnt);
 
-		/* Check for overflow.  */
-		if (ent.vn_aux > (size_t) (endbuf - vstart))
-		  break;
 		vstart += ent.vn_aux;
 
 		for (j = 0, isum = idx + ent.vn_aux; j < ent.vn_cnt; ++j)
 		  {
 		    Elf_External_Vernaux * eaux;
-		    Elf_Internal_Vernaux aux;
+		    Elf_Internal_Vernaux   aux;
 
-		    if (vstart + sizeof (*eaux) > endbuf)
-		      break;
 		    eaux = (Elf_External_Vernaux *) vstart;
 
 		    aux.vna_hash  = BYTE_GET (eaux->vna_hash);
@@ -2674,48 +2504,22 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 		    aux.vna_name  = BYTE_GET (eaux->vna_name);
 		    aux.vna_next  = BYTE_GET (eaux->vna_next);
 
-		    if (VALID_DYNAMIC_NAME (aux.vna_name))
-		      printf (_("  %#06lx:   Name: %s"),
-			      isum, GET_DYNAMIC_NAME (aux.vna_name));
+		    if (dynamic_strings)
+		      printf (_("  %#06x: Name: %s"),
+			      isum, dynamic_strings + aux.vna_name);
 		    else
-		      printf (_("  %#06lx:   Name index: %lx"),
+		      printf (_("  %#06x: Name index: %lx"),
 			      isum, aux.vna_name);
 
 		    printf (_("  Flags: %s  Version: %d\n"),
 			    get_ver_flags (aux.vna_flags), aux.vna_other);
 
-		    if (aux.vna_next < sizeof (*eaux)
-			&& !(j == ent.vn_cnt - 1 && aux.vna_next == 0))
-		      {
-			warn (_("Invalid vna_next field of %lx\n"),
-			      aux.vna_next);
-			j = ent.vn_cnt;
-			break;
-		      }
-		    /* Check for overflow.  */
-		    if (aux.vna_next > (size_t) (endbuf - vstart))
-		      break;
 		    isum   += aux.vna_next;
 		    vstart += aux.vna_next;
 		  }
 
-		if (j < ent.vn_cnt)
-		  warn (_("Missing Version Needs auxillary information\n"));
-
-		if (ent.vn_next < sizeof (*entry)
-		    && !(cnt == section->sh_info - 1 && ent.vn_next == 0))
-		  {
-		    warn (_("Invalid vn_next field of %lx\n"), ent.vn_next);
-		    cnt = section->sh_info;
-		    break;
-		  }
-		if (ent.vn_next > (size_t) (endbuf - ((char *) eneed + idx)))
-		  break;
 		idx += ent.vn_next;
 	      }
-
-	    if (cnt < section->sh_info)
-	      warn (_("Missing Version Needs information\n"));
 
 	    free (eneed);
 	  }
@@ -2723,87 +2527,68 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 
 	case SHT_GNU_versym:
 	  {
-	    Elf_Internal_Shdr * link_section;
-	    size_t total;
-	    unsigned int cnt;
-	    unsigned char * edata;
-	    unsigned short * data;
-	    char * strtab;
-	    Elf_Internal_Sym * symbols;
-	    Elf_Internal_Shdr * string_sec;
-	    unsigned long num_syms;
-	    long off;
+	    Elf32_Internal_Shdr *       link_section;
+	    int              		total;
+	    int              		cnt;
+	    unsigned char * 		edata;
+	    unsigned short * 		data;
+	    char *           		strtab;
+	    Elf_Internal_Sym * 		symbols;
+	    Elf32_Internal_Shdr *       string_sec;
 
-	    if (section->sh_link >= filedata->file_header.e_shnum)
-	      break;
+	    link_section = SECTION_HEADER (section->sh_link);
+	    total = section->sh_size / section->sh_entsize;
 
-	    link_section = filedata->section_headers + section->sh_link;
-	    total = section->sh_size / sizeof (Elf_External_Versym);
+	    found = 1;
 
-	    if (link_section->sh_link >= filedata->file_header.e_shnum)
-	      break;
+	    symbols = GET_ELF_SYMBOLS (file, link_section);
 
-	    found = TRUE;
+	    string_sec = SECTION_HEADER (link_section->sh_link);
 
-	    symbols = GET_ELF_SYMBOLS (filedata, link_section, & num_syms);
-	    if (symbols == NULL)
-	      break;
-
-	    string_sec = filedata->section_headers + link_section->sh_link;
-
-	    strtab = (char *) get_data (NULL, filedata, string_sec->sh_offset, 1,
-                                        string_sec->sh_size,
-                                        _("version string table"));
+	    strtab = (char *) get_data (NULL, file, string_sec->sh_offset,
+					string_sec->sh_size,
+					_("version string table"));
 	    if (!strtab)
-	      {
-		free (symbols);
-		break;
-	      }
+	      break;
 
-	    printf (ngettext ("\nVersion symbols section '%s' "
-			      "contains %lu entry:\n",
-			      "\nVersion symbols section '%s' "
-			      "contains %lu entries:\n",
-			      total),
-		    printable_section_name (filedata, section), (unsigned long) total);
+	    printf (_("\nVersion symbols section '%s' contains %d entries:\n"),
+		    SECTION_NAME (section), total);
 
-	    printf (_(" Addr: 0x"));
+	    printf (_(" Addr: "));
 	    printf_vma (section->sh_addr);
-	    printf (_("  Offset: %#08lx  Link: %u (%s)\n"),
+	    printf (_("  Offset: %#08lx  Link: %lx (%s)\n"),
 		    (unsigned long) section->sh_offset, section->sh_link,
-		    printable_section_name (filedata, link_section));
+		    SECTION_NAME (link_section));
 
-	    off = offset_from_vma (filedata,
-				   version_info[DT_VERSIONTAGIDX (DT_VERSYM)],
-				   total * sizeof (short));
-	    edata = (unsigned char *) get_data (NULL, filedata, off, total,
-                                                sizeof (short),
-                                                _("version symbol data"));
+	    edata =
+	      ((unsigned char *)
+	       get_data (NULL, file,
+			 version_info[DT_VERSIONTAGIDX (DT_VERSYM)] - loadaddr,
+			 total * sizeof (short), _("version symbol data")));
 	    if (!edata)
 	      {
 		free (strtab);
-		free (symbols);
 		break;
 	      }
 
-	    data = (short unsigned int *) cmalloc (total, sizeof (short));
+	    data = (unsigned short *) malloc (total * sizeof (short));
 
 	    for (cnt = total; cnt --;)
-	      data[cnt] = byte_get (edata + cnt * sizeof (short),
-				    sizeof (short));
+	      data [cnt] = byte_get (edata + cnt * sizeof (short),
+				     sizeof (short));
 
 	    free (edata);
 
 	    for (cnt = 0; cnt < total; cnt += 4)
 	      {
 		int j, nn;
-		char *name;
-		char *invalid = _("*invalid*");
+		int check_def, check_need;
+		char * name;
 
 		printf ("  %03x:", cnt);
 
 		for (j = 0; (j < 4) && (cnt + j) < total; ++j)
-		  switch (data[cnt + j])
+		  switch (data [cnt + j])
 		    {
 		    case 0:
 		      fputs (_("   0 (*local*)    "), stdout);
@@ -2814,37 +2599,38 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 		      break;
 
 		    default:
-		      nn = printf ("%4x%c", data[cnt + j] & VERSYM_VERSION,
-				   data[cnt + j] & VERSYM_HIDDEN ? 'h' : ' ');
+		      nn = printf ("%4x%c", data [cnt + j] & 0x7fff,
+				   data [cnt + j] & 0x8000 ? 'h' : ' ');
 
-		      /* If this index value is greater than the size of the symbols
-		         array, break to avoid an out-of-bounds read.  */
-		      if ((unsigned long)(cnt + j) >= num_syms)
-		        {
-		          warn (_("invalid index into symbol array\n"));
-		          break;
+		      check_def = 1;
+		      check_need = 1;
+		      if (SECTION_HEADER (symbols [cnt + j].st_shndx)->sh_type
+			  != SHT_NOBITS)
+			{
+			  if (symbols [cnt + j].st_shndx == SHN_UNDEF)
+			    check_def = 0;
+			  else
+			    check_need = 0;
 			}
 
-		      name = NULL;
-		      if (version_info[DT_VERSIONTAGIDX (DT_VERNEED)])
+		      if (check_need
+			  && version_info [DT_VERSIONTAGIDX (DT_VERNEED)])
 			{
-			  Elf_Internal_Verneed ivn;
-			  unsigned long offset;
+			  Elf_Internal_Verneed     ivn;
+			  unsigned long            offset;
 
-			  offset = offset_from_vma
-			    (filedata, version_info[DT_VERSIONTAGIDX (DT_VERNEED)],
-			     sizeof (Elf_External_Verneed));
+			  offset = version_info [DT_VERSIONTAGIDX (DT_VERNEED)]
+			    - loadaddr;
 
-			  do
+		          do
 			    {
-			      Elf_Internal_Vernaux ivna;
-			      Elf_External_Verneed evn;
-			      Elf_External_Vernaux evna;
-			      unsigned long a_off;
+			      Elf_Internal_Vernaux   ivna;
+			      Elf_External_Verneed   evn;
+			      Elf_External_Vernaux   evna;
+			      unsigned long          a_off;
 
-			      if (get_data (&evn, filedata, offset, sizeof (evn), 1,
-					    _("version need")) == NULL)
-				break;
+			      get_data (&evn, file, offset, sizeof (evn),
+					_("version need"));
 
 			      ivn.vn_aux  = BYTE_GET (evn.vn_aux);
 			      ivn.vn_next = BYTE_GET (evn.vn_next);
@@ -2853,31 +2639,27 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 
 			      do
 				{
-				  if (get_data (&evna, filedata, a_off, sizeof (evna),
-						1, _("version need aux (2)")) == NULL)
-				    {
-				      ivna.vna_next  = 0;
-				      ivna.vna_other = 0;
-				    }
-				  else
-				    {
-				      ivna.vna_next  = BYTE_GET (evna.vna_next);
-				      ivna.vna_other = BYTE_GET (evna.vna_other);
-				    }
+				  get_data (&evna, file, a_off, sizeof (evna),
+					    _("version need aux (2)"));
+
+				  ivna.vna_next  = BYTE_GET (evna.vna_next);
+				  ivna.vna_other = BYTE_GET (evna.vna_other);
 
 				  a_off += ivna.vna_next;
 				}
-			      while (ivna.vna_other != data[cnt + j]
+			      while (ivna.vna_other != data [cnt + j]
 				     && ivna.vna_next != 0);
 
-			      if (ivna.vna_other == data[cnt + j])
+			      if (ivna.vna_other == data [cnt + j])
 				{
 				  ivna.vna_name = BYTE_GET (evna.vna_name);
 
-				  if (ivna.vna_name >= string_sec->sh_size)
-				    name = invalid;
-				  else
-				    name = strtab + ivna.vna_name;
+				  name = strtab + ivna.vna_name;
+				  nn += printf ("(%s%-*s",
+						name,
+						12 - (int) strlen (name),
+						")");
+				  check_def = 0;
 				  break;
 				}
 
@@ -2886,66 +2668,49 @@ static bfd_boolean process_version_sections (Filedata * filedata)
 			  while (ivn.vn_next);
 			}
 
-		      if (data[cnt + j] != 0x8001
-			  && version_info[DT_VERSIONTAGIDX (DT_VERDEF)])
+		      if (check_def && data [cnt + j] != 0x8001
+			  && version_info [DT_VERSIONTAGIDX (DT_VERDEF)])
 			{
-			  Elf_Internal_Verdef ivd;
-			  Elf_External_Verdef evd;
-			  unsigned long offset;
+			  Elf_Internal_Verdef  ivd;
+			  Elf_External_Verdef  evd;
+			  unsigned long        offset;
 
-			  offset = offset_from_vma
-			    (filedata, version_info[DT_VERSIONTAGIDX (DT_VERDEF)],
-			     sizeof evd);
+			  offset = version_info
+			    [DT_VERSIONTAGIDX (DT_VERDEF)] - loadaddr;
 
 			  do
 			    {
-			      if (get_data (&evd, filedata, offset, sizeof (evd), 1,
-					    _("version def")) == NULL)
-				{
-				  ivd.vd_next = 0;
-				  /* PR 17531: file: 046-1082287-0.004.  */
-				  ivd.vd_ndx  = (data[cnt + j] & VERSYM_VERSION) + 1;
-				  break;
-				}
-			      else
-				{
-				  ivd.vd_next = BYTE_GET (evd.vd_next);
-				  ivd.vd_ndx  = BYTE_GET (evd.vd_ndx);
-				}
+			      get_data (&evd, file, offset, sizeof (evd),
+					_("version def"));
+
+			      ivd.vd_next = BYTE_GET (evd.vd_next);
+			      ivd.vd_ndx  = BYTE_GET (evd.vd_ndx);
 
 			      offset += ivd.vd_next;
 			    }
-			  while (ivd.vd_ndx != (data[cnt + j] & VERSYM_VERSION)
+			  while (ivd.vd_ndx != (data [cnt + j] & 0x7fff)
 				 && ivd.vd_next != 0);
 
-			  if (ivd.vd_ndx == (data[cnt + j] & VERSYM_VERSION))
+			  if (ivd.vd_ndx == (data [cnt + j] & 0x7fff))
 			    {
-			      Elf_External_Verdaux evda;
-			      Elf_Internal_Verdaux ivda;
+			      Elf_External_Verdaux  evda;
+			      Elf_Internal_Verdaux  ivda;
 
 			      ivd.vd_aux = BYTE_GET (evd.vd_aux);
 
-			      if (get_data (&evda, filedata,
-					    offset - ivd.vd_next + ivd.vd_aux,
-					    sizeof (evda), 1,
-					    _("version def aux")) == NULL)
-				break;
+			      get_data (&evda, file,
+					offset - ivd.vd_next + ivd.vd_aux,
+					sizeof (evda), _("version def aux"));
 
 			      ivda.vda_name = BYTE_GET (evda.vda_name);
 
-			      if (ivda.vda_name >= string_sec->sh_size)
-				name = invalid;
-			      else if (name != NULL && name != invalid)
-				name = _("*both*");
-			      else
-				name = strtab + ivda.vda_name;
+			      name = strtab + ivda.vda_name;
+			      nn += printf ("(%s%-*s",
+					    name,
+					    12 - (int) strlen (name),
+					    ")");
 			    }
 			}
-		      if (name != NULL)
-			nn += printf ("(%s%-*s",
-				      name,
-				      12 - (int) strlen (name),
-				      ")");
 
 		      if (nn < 18)
 			printf ("%*c", 18 - nn, ' ');
@@ -2968,7 +2733,7 @@ static bfd_boolean process_version_sections (Filedata * filedata)
   if (! found)
     printf (_("\nNo version information found in this file.\n"));
 
-  return TRUE;
+  return 1;
 }
 
 
@@ -3069,162 +2834,99 @@ static bfd_boolean process_corefile_note_segments (Filedata * filedata)
   return res;
 }
 
-static bfd_boolean process_gnu_liblist (Filedata * filedata)
+
+static int process_gnu_liblist (FILE * file)
 {
-  Elf_Internal_Shdr * section;
-  Elf_Internal_Shdr * string_sec;
+  Elf_Internal_Shdr * section, * string_sec;
   Elf32_External_Lib * elib;
   char * strtab;
-  size_t strtab_size;
   size_t cnt;
-  unsigned long num_liblist;
   unsigned i;
-  bfd_boolean res = TRUE;
 
   if (! do_arch)
-    return TRUE;
+    return 0;
 
-  for (i = 0, section = filedata->section_headers;
-       i < filedata->file_header.e_shnum;
-       i++, section++)
+  for (i = 0, section = section_headers;
+       i < elf_header.e_shnum;
+       i++, section ++)
     {
       switch (section->sh_type)
 	{
 	case SHT_GNU_LIBLIST:
-	  if (section->sh_link >= filedata->file_header.e_shnum)
-	    break;
-
-	  elib = (Elf32_External_Lib *)
-              get_data (NULL, filedata, section->sh_offset, 1, section->sh_size,
-                        _("liblist section data"));
+	  elib = ((Elf32_External_Lib *)
+		 get_data (NULL, file, section->sh_offset, section->sh_size,
+			   _("liblist")));
 
 	  if (elib == NULL)
-	    {
-	      res = FALSE;
-	      break;
-	    }
+	    break;
+	  string_sec = SECTION_HEADER (section->sh_link);
 
-	  string_sec = filedata->section_headers + section->sh_link;
-	  strtab = (char *) get_data (NULL, filedata, string_sec->sh_offset, 1,
-                                      string_sec->sh_size,
-                                      _("liblist string table"));
+	  strtab = (char *) get_data (NULL, file, string_sec->sh_offset,
+				      string_sec->sh_size,
+				      _("liblist string table"));
+
 	  if (strtab == NULL
 	      || section->sh_entsize != sizeof (Elf32_External_Lib))
 	    {
 	      free (elib);
-	      free (strtab);
-	      res = FALSE;
 	      break;
 	    }
-	  strtab_size = string_sec->sh_size;
 
-	  num_liblist = section->sh_size / sizeof (Elf32_External_Lib);
-	  printf (ngettext ("\nLibrary list section '%s' contains %lu entries:\n",
-			    "\nLibrary list section '%s' contains %lu entries:\n",
-			    num_liblist),
-		  printable_section_name (filedata, section),
-		  num_liblist);
+	  printf (_("\nLibrary list section '%s' contains %lu entries:\n"),
+		  SECTION_NAME (section),
+		  (long) (section->sh_size / sizeof (Elf32_External_Lib)));
 
-	  puts (_("     Library              Time Stamp          Checksum   Version Flags"));
+	  puts ("     Library              Time Stamp          Checksum   Version Flags");
 
 	  for (cnt = 0; cnt < section->sh_size / sizeof (Elf32_External_Lib);
 	       ++cnt)
 	    {
 	      Elf32_Lib liblist;
-	      time_t atime;
-	      char timebuf[128];
+	      time_t time;
+	      char timebuf[20];
 	      struct tm * tmp;
 
 	      liblist.l_name = BYTE_GET (elib[cnt].l_name);
-	      atime = BYTE_GET (elib[cnt].l_time_stamp);
+	      time = BYTE_GET (elib[cnt].l_time_stamp);
 	      liblist.l_checksum = BYTE_GET (elib[cnt].l_checksum);
 	      liblist.l_version = BYTE_GET (elib[cnt].l_version);
 	      liblist.l_flags = BYTE_GET (elib[cnt].l_flags);
 
-	      tmp = gmtime (&atime);
-	      snprintf (timebuf, sizeof (timebuf),
-			"%04u-%02u-%02uT%02u:%02u:%02u",
-			tmp->tm_year + 1900, tmp->tm_mon + 1, tmp->tm_mday,
-			tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+	      tmp = gmtime (&time);
+	      sprintf (timebuf, "%04u-%02u-%02uT%02u:%02u:%02u",
+		       tmp->tm_year + 1900, tmp->tm_mon + 1, tmp->tm_mday,
+		       tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
 
 	      printf ("%3lu: ", (unsigned long) cnt);
 	      if (do_wide)
-		printf ("%-20s", liblist.l_name < strtab_size
-			? strtab + liblist.l_name : _("<corrupt>"));
+		printf ("%-20s", strtab + liblist.l_name);
 	      else
-		printf ("%-20.20s", liblist.l_name < strtab_size
-			? strtab + liblist.l_name : _("<corrupt>"));
+		printf ("%-20.20s", strtab + liblist.l_name);
 	      printf (" %s %#010lx %-7ld %-7ld\n", timebuf, liblist.l_checksum,
 		      liblist.l_version, liblist.l_flags);
 	    }
 
 	  free (elib);
-	  free (strtab);
 	}
     }
 
-  return res;
+  return 1;
 }
 
-static bfd_boolean process_arch_specific (Filedata * filedata)
+
+static int process_arch_specific (FILE * file)
 {
   if (! do_arch)
-    return TRUE;
+    return 1;
 
-  switch (filedata->file_header.e_machine)
+  switch (elf_header.e_machine)
     {
-    case EM_ARC:
-    case EM_ARC_COMPACT:
-    case EM_ARC_COMPACT2:
-      return process_attributes (filedata, "ARC", SHT_ARC_ATTRIBUTES,
-				 display_arc_attribute,
-				 display_generic_attribute);
-    case EM_ARM:
-      return process_attributes (filedata, "aeabi", SHT_ARM_ATTRIBUTES,
-				 display_arm_attribute,
-				 display_generic_attribute);
-
     case EM_MIPS:
     case EM_MIPS_RS3_LE:
-      return process_mips_specific (filedata);
-
-    case EM_MSP430:
-     return process_attributes (filedata, "mspabi", SHT_MSP430_ATTRIBUTES,
-				display_msp430x_attribute,
-				display_msp430_gnu_attribute);
-
-    case EM_RISCV:
-     return process_attributes (filedata, "riscv", SHT_RISCV_ATTRIBUTES,
-				display_riscv_attribute,
-				display_generic_attribute);
-
-    case EM_NDS32:
-      return process_nds32_specific (filedata);
-
-    case EM_PPC:
-    case EM_PPC64:
-      return process_attributes (filedata, NULL, SHT_GNU_ATTRIBUTES, NULL,
-				 display_power_gnu_attribute);
-
-    case EM_S390:
-    case EM_S390_OLD:
-      return process_attributes (filedata, NULL, SHT_GNU_ATTRIBUTES, NULL,
-				 display_s390_gnu_attribute);
-
-    case EM_SPARC:
-    case EM_SPARC32PLUS:
-    case EM_SPARCV9:
-      return process_attributes (filedata, NULL, SHT_GNU_ATTRIBUTES, NULL,
-				 display_sparc_gnu_attribute);
-
-    case EM_TI_C6000:
-      return process_attributes (filedata, "c6xabi", SHT_C6000_ATTRIBUTES,
-				 display_tic6x_attribute,
-				 display_generic_attribute);
-
+      return process_mips_specific (file);
+      break;
     default:
-      return process_attributes (filedata, "gnu", SHT_GNU_ATTRIBUTES,
-				 display_public_gnu_attributes,
-				 display_generic_attribute);
+      break;
     }
+  return 1;
 }

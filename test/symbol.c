@@ -1,17 +1,18 @@
 #include <stdio.h>
-#include <linux/elf.h>
 #include <bfd.h>
 #include <getopt.h>
+#include <internal.h>
+#include <elf.h>
+#include <common.h>
 
 //获取数组长度
 #define NUM_ELEM(array) 	(sizeof (array) / sizeof ((array)[0]))
 
-
+Elf_Internal_Ehdr       elf_header;
 Elf_Internal_Shdr *     section_headers;
 Elf_Internal_Sym *	dynamic_symbols;
 Elf_Internal_Syminfo *	dynamic_syminfo;
-//展示名？
-int			show_name;
+
 //字符表
 char *			string_table;
 unsigned long		string_table_length;
@@ -20,56 +21,55 @@ char *			dynamic_strings;
 unsigned long           num_dynamic_syms;
 
 
+
+/*一个动态标志数组，指示哪些节需要转储。 */
+char *			dump_sects = NULL;
+unsigned int		num_dump_sects = 0;
+
 //版本信息?
 int			version_info[16];
 //动态信息
 int			dynamic_info[DT_JMPREL + 1];
 
-static bfd_boolean get_file_header (Filedata * filedata)
+static int get_file_header (FILE * file)
 {
   /* Read in the identity array.  */
-  if (fread (filedata->file_header.e_ident, EI_NIDENT, 1, filedata->handle) != 1)
-    return FALSE;
+  if (fread (elf_header.e_ident, EI_NIDENT, 1, file) != 1)
+    return 0;
 
   /* Determine how to read the rest of the header.  */
-  switch (filedata->file_header.e_ident[EI_DATA])
+  switch (elf_header.e_ident [EI_DATA])
     {
-    default:
-    case ELFDATANONE:
-    case ELFDATA2LSB:
-      byte_get = byte_get_little_endian;
-      byte_put = byte_put_little_endian;
-      break;
-    case ELFDATA2MSB:
-      byte_get = byte_get_big_endian;
-      byte_put = byte_put_big_endian;
-      break;
+    default: /* fall through */
+    case ELFDATANONE: /* fall through */
+    case ELFDATA2LSB: byte_get = byte_get_little_endian; break;
+    case ELFDATA2MSB: byte_get = byte_get_big_endian; break;
     }
 
   /* For now we only support 32 bit and 64 bit ELF files.  */
-  is_32bit_elf = (filedata->file_header.e_ident[EI_CLASS] != ELFCLASS64);
+  is_32bit_elf = (elf_header.e_ident [EI_CLASS] != ELFCLASS64);
 
   /* Read in the rest of the header.  */
   if (is_32bit_elf)
     {
       Elf32_External_Ehdr ehdr32;
 
-      if (fread (ehdr32.e_type, sizeof (ehdr32) - EI_NIDENT, 1, filedata->handle) != 1)
-	return FALSE;
+      if (fread (ehdr32.e_type, sizeof (ehdr32) - EI_NIDENT, 1, file) != 1)
+	      return 0;
 
-      filedata->file_header.e_type      = BYTE_GET (ehdr32.e_type);
-      filedata->file_header.e_machine   = BYTE_GET (ehdr32.e_machine);
-      filedata->file_header.e_version   = BYTE_GET (ehdr32.e_version);
-      filedata->file_header.e_entry     = BYTE_GET (ehdr32.e_entry);
-      filedata->file_header.e_phoff     = BYTE_GET (ehdr32.e_phoff);
-      filedata->file_header.e_shoff     = BYTE_GET (ehdr32.e_shoff);
-      filedata->file_header.e_flags     = BYTE_GET (ehdr32.e_flags);
-      filedata->file_header.e_ehsize    = BYTE_GET (ehdr32.e_ehsize);
-      filedata->file_header.e_phentsize = BYTE_GET (ehdr32.e_phentsize);
-      filedata->file_header.e_phnum     = BYTE_GET (ehdr32.e_phnum);
-      filedata->file_header.e_shentsize = BYTE_GET (ehdr32.e_shentsize);
-      filedata->file_header.e_shnum     = BYTE_GET (ehdr32.e_shnum);
-      filedata->file_header.e_shstrndx  = BYTE_GET (ehdr32.e_shstrndx);
+      elf_header.e_type      = BYTE_GET (ehdr32.e_type);
+      elf_header.e_machine   = BYTE_GET (ehdr32.e_machine);
+      elf_header.e_version   = BYTE_GET (ehdr32.e_version);
+      elf_header.e_entry     = BYTE_GET (ehdr32.e_entry);
+      elf_header.e_phoff     = BYTE_GET (ehdr32.e_phoff);
+      elf_header.e_shoff     = BYTE_GET (ehdr32.e_shoff);
+      elf_header.e_flags     = BYTE_GET (ehdr32.e_flags);
+      elf_header.e_ehsize    = BYTE_GET (ehdr32.e_ehsize);
+      elf_header.e_phentsize = BYTE_GET (ehdr32.e_phentsize);
+      elf_header.e_phnum     = BYTE_GET (ehdr32.e_phnum);
+      elf_header.e_shentsize = BYTE_GET (ehdr32.e_shentsize);
+      elf_header.e_shnum     = BYTE_GET (ehdr32.e_shnum);
+      elf_header.e_shstrndx  = BYTE_GET (ehdr32.e_shstrndx);
     }
   else
     {
@@ -78,239 +78,104 @@ static bfd_boolean get_file_header (Filedata * filedata)
       /* If we have been compiled with sizeof (bfd_vma) == 4, then
 	 we will not be able to cope with the 64bit data found in
 	 64 ELF files.  Detect this now and abort before we start
-	 overwriting things.  */
+	 overwritting things.  */
       if (sizeof (bfd_vma) < 8)
 	{
 	  error (_("This instance of readelf has been built without support for a\n\
 64 bit data type and so it cannot read 64 bit ELF files.\n"));
-	  return FALSE;
+	  return 0;
 	}
 
-      if (fread (ehdr64.e_type, sizeof (ehdr64) - EI_NIDENT, 1, filedata->handle) != 1)
-	return FALSE;
+      if (fread (ehdr64.e_type, sizeof (ehdr64) - EI_NIDENT, 1, file) != 1)
+	return 0;
 
-      filedata->file_header.e_type      = BYTE_GET (ehdr64.e_type);
-      filedata->file_header.e_machine   = BYTE_GET (ehdr64.e_machine);
-      filedata->file_header.e_version   = BYTE_GET (ehdr64.e_version);
-      filedata->file_header.e_entry     = BYTE_GET (ehdr64.e_entry);
-      filedata->file_header.e_phoff     = BYTE_GET (ehdr64.e_phoff);
-      filedata->file_header.e_shoff     = BYTE_GET (ehdr64.e_shoff);
-      filedata->file_header.e_flags     = BYTE_GET (ehdr64.e_flags);
-      filedata->file_header.e_ehsize    = BYTE_GET (ehdr64.e_ehsize);
-      filedata->file_header.e_phentsize = BYTE_GET (ehdr64.e_phentsize);
-      filedata->file_header.e_phnum     = BYTE_GET (ehdr64.e_phnum);
-      filedata->file_header.e_shentsize = BYTE_GET (ehdr64.e_shentsize);
-      filedata->file_header.e_shnum     = BYTE_GET (ehdr64.e_shnum);
-      filedata->file_header.e_shstrndx  = BYTE_GET (ehdr64.e_shstrndx);
+      elf_header.e_type      = BYTE_GET (ehdr64.e_type);
+      elf_header.e_machine   = BYTE_GET (ehdr64.e_machine);
+      elf_header.e_version   = BYTE_GET (ehdr64.e_version);
+      elf_header.e_entry     = BYTE_GET8 (ehdr64.e_entry);
+      elf_header.e_phoff     = BYTE_GET8 (ehdr64.e_phoff);
+      elf_header.e_shoff     = BYTE_GET8 (ehdr64.e_shoff);
+      elf_header.e_flags     = BYTE_GET (ehdr64.e_flags);
+      elf_header.e_ehsize    = BYTE_GET (ehdr64.e_ehsize);
+      elf_header.e_phentsize = BYTE_GET (ehdr64.e_phentsize);
+      elf_header.e_phnum     = BYTE_GET (ehdr64.e_phnum);
+      elf_header.e_shentsize = BYTE_GET (ehdr64.e_shentsize);
+      elf_header.e_shnum     = BYTE_GET (ehdr64.e_shnum);
+      elf_header.e_shstrndx  = BYTE_GET (ehdr64.e_shstrndx);
     }
 
-  if (filedata->file_header.e_shoff)
+  if (elf_header.e_shoff)
     {
       /* There may be some extensions in the first section header.  Don't
 	 bomb if we can't read it.  */
       if (is_32bit_elf)
-	get_32bit_section_headers (filedata, TRUE);
+	get_32bit_section_headers (file, 1);
       else
-	get_64bit_section_headers (filedata, TRUE);
+	get_64bit_section_headers (file, 1);
     }
 
-  return TRUE;
+  return 1;
 }
 
 
-
-static void parse_args (Filedata * filedata, int argc, char ** argv)
+static void parse_args (int argc,char** argv)
 {
   int c;
 
   if (argc < 2)
-    usage (stderr);
+    usage ();
+    //如果参数小于2，提示
 
-  while ((c = getopt_long
-	  (argc, argv, "ADHINR:SVWacdeghi:lnp:rstuvw::x:z", options, NULL)) != EOF)
+/*名称为“结构选项”的“ has_arg”字段的值。 */
+  while ((c = getopt_long(argc, argv, "ersuahnldSDAIw::x:i:vVW", options, NULL)) != EOF)
     {
+      char *    cp;
+      int	section;
+
       switch (c)
 	{
 	case 0:
 	  /* Long options.  */
 	  break;
 	case 'H':
-	  usage (stdout);
+	  usage ();
 	  break;
 
-	case 'a':
-	  do_syms = TRUE;
-	  do_reloc = TRUE;
-	  do_unwind = TRUE;
-	  do_dynamic = TRUE;
-	  do_header = TRUE;
-	  do_sections = TRUE;
-	  do_section_groups = TRUE;
-	  do_segments = TRUE;
-	  do_version = TRUE;
-	  do_histogram = TRUE;
-	  do_arch = TRUE;
-	  do_notes = TRUE;
-	  break;
-	case 'g':
-	  do_section_groups = TRUE;
-	  break;
-	case 't':
-	case 'N':
-	  do_sections = TRUE;
-	  do_section_details = TRUE;
-	  break;
-	case 'e':
-	  do_header = TRUE;
-	  do_sections = TRUE;
-	  do_segments = TRUE;
-	  break;
-	case 'A':
-	  do_arch = TRUE;
-	  break;
 	case 'D':
-	  do_using_dynamic = TRUE;
+	  do_using_dynamic ++;
 	  break;
 	case 'r':
-	  do_reloc = TRUE;
-	  break;
-	case 'u':
-	  do_unwind = TRUE;
-	  break;
-	case 'h':
-	  do_header = TRUE;
-	  break;
-	case 'l':
-	  do_segments = TRUE;
+	  do_reloc ++;
 	  break;
 	case 's':
-	  do_syms = TRUE;
+	  do_syms ++;
 	  break;
 	case 'S':
-	  do_sections = TRUE;
+	  do_sections ++;
 	  break;
 	case 'd':
-	  do_dynamic = TRUE;
+	  do_dynamic ++;
 	  break;
-	case 'I':
-	  do_histogram = TRUE;
-	  break;
-	case 'n':
-	  do_notes = TRUE;
-	  break;
-	case 'c':
-	  do_archive_index = TRUE;
-	  break;
-	case 'x':
-	  request_dump (filedata, HEX_DUMP);
-	  break;
-	case 'p':
-	  request_dump (filedata, STRING_DUMP);
-	  break;
-	case 'R':
-	  request_dump (filedata, RELOC_DUMP);
-	  break;
-	case 'z':
-	  decompress_dumps = TRUE;
-	  break;
-	case 'w':
-	  do_dump = TRUE;
-	  if (optarg == 0)
-	    {
-	      do_debugging = TRUE;
-	      dwarf_select_sections_all ();
-	    }
-	  else
-	    {
-	      do_debugging = FALSE;
-	      dwarf_select_sections_by_letters (optarg);
-	    }
-	  break;
-	case OPTION_DEBUG_DUMP:
-	  do_dump = TRUE;
-	  if (optarg == 0)
-	    do_debugging = TRUE;
-	  else
-	    {
-	      do_debugging = FALSE;
-	      dwarf_select_sections_by_names (optarg);
-	    }
-	  break;
-	case OPTION_DWARF_DEPTH:
-	  {
-	    char *cp;
+  }
 
-	    dwarf_cutoff_level = strtoul (optarg, & cp, 0);
-	  }
-	  break;
-	case OPTION_DWARF_START:
-	  {
-	    char *cp;
-
-	    dwarf_start_die = strtoul (optarg, & cp, 0);
-	  }
-	  break;
-	case OPTION_DWARF_CHECK:
-	  dwarf_check = TRUE;
-	  break;
-	case OPTION_CTF_DUMP:
-	  do_ctf = TRUE;
-	  request_dump (filedata, CTF_DUMP);
-	  break;
-	case OPTION_CTF_SYMBOLS:
-	  dump_ctf_symtab_name = strdup (optarg);
-	  break;
-	case OPTION_CTF_STRINGS:
-	  dump_ctf_strtab_name = strdup (optarg);
-	  break;
-	case OPTION_CTF_PARENT:
-	  dump_ctf_parent_name = strdup (optarg);
-	  break;
-	case OPTION_DYN_SYMS:
-	  do_dyn_syms = TRUE;
-	  break;
-#ifdef SUPPORT_DISASSEMBLY
-	case 'i':
-	  request_dump (filedata, DISASS_DUMP);
-	  break;
-#endif
-	case 'v':
-	  print_version (program_name);
-	  break;
-	case 'V':
-	  do_version = TRUE;
-	  break;
-	case 'W':
-	  do_wide = TRUE;
-	  break;
-	default:
-	  /* xgettext:c-format */
-	  error (_("Invalid option '-%c'\n"), c);
-	  /* Fall through.  */
-	case '?':
-	  usage (stderr);
-	}
+  if (!do_dynamic && !do_syms && !do_reloc && !do_sections )
+    usage ();
+  else if (argc < 3)
+    {
+      warn (_("Nothing to do.\n"));
+      usage();
     }
-
-  if (!do_dynamic && !do_syms && !do_reloc && !do_unwind && !do_sections
-      && !do_segments && !do_header && !do_dump && !do_version
-      && !do_histogram && !do_debugging && !do_arch && !do_notes
-      && !do_section_groups && !do_archive_index
-      && !do_dyn_syms)
-    usage (stderr);
 }
 
 
-static int
-process_file_header ()
+static int process_file_header ()
 {
   if (   elf_header.e_ident [EI_MAG0] != ELFMAG0
       || elf_header.e_ident [EI_MAG1] != ELFMAG1
       || elf_header.e_ident [EI_MAG2] != ELFMAG2
       || elf_header.e_ident [EI_MAG3] != ELFMAG3)
     {
-      error
-	(_("Not an ELF file - it has the wrong magic bytes at the start\n"));
+      error (_("Not an ELF file - it has the wrong magic bytes at the start\n"));
       return 0;
     }
 
@@ -371,6 +236,7 @@ process_file_header ()
       putc ('\n', stdout);
       printf (_("  Section header string table index: %ld"),
 	      (long) elf_header.e_shstrndx);
+        //#define SHN_XINDEX      0xFFFF		/* Section index is held elsewhere */
       if (section_headers != NULL && elf_header.e_shstrndx == SHN_XINDEX)
 	printf (" (%ld)", (long) section_headers[0].sh_link);
       putc ('\n', stdout);
@@ -453,9 +319,6 @@ static int process_file (char* file_name)
 //加载重定位
   process_relocs (file);
 
-//用于ARM和C6X展开表。
-  process_unwind (file);
-
 //转储符号表
   process_symbol_table (file);
   process_syminfo (file);
@@ -468,10 +331,10 @@ static int process_file (char* file_name)
 //根据部分名称。
   process_section_contents (file);
 
-//加载codefile
-  process_corefile_contents (file);
+
 //加载动态库列表
   process_gnu_liblist (file);
+
 //不知道这是啥
   process_arch_specific (file);
 
@@ -535,11 +398,20 @@ int main (int argc,char** argv)
 
     /*1003.2表示必须在任何调用前为1。 */ 
     //int optind = 1;
+    /*下一个要扫描元素的ARGV索引。
+    这用于与呼叫者之间的通信
+    以及在连续调用“ getopt”之间的通信。
+    进入“ getopt”时，零表示这是第一个调用； 初始化。
+    当“ getopt”返回-1时，这是第一个索引
+    调用者应自行扫描的非选项元素。
+    否则，“ optind”会从一个呼叫传达到下一个呼叫
+    到目前为止已扫描了多少ARGV。*/
   if (optind < (argc - 1))
     show_name = 1;
 
   err = 0;
 
+  //当
   while (optind < argc)
     err |= process_file (argv [optind ++]);
 
